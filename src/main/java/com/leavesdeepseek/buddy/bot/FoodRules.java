@@ -19,6 +19,41 @@ public final class FoodRules {
             Material.GOLDEN_APPLE,
             Material.GOLDEN_CARROT);
 
+    /** 饥饿值满时也能吃的食物（原版只有金苹果例外）。 */
+    private static final Set<Material> ALWAYS_EDIBLE = EnumSet.of(
+            Material.ENCHANTED_GOLDEN_APPLE,
+            Material.GOLDEN_APPLE);
+
+    /**
+     * 紧急进食优先级：按饱食度从高到低排列，附魔金苹果永远排第一
+     * （回血靠吸收/生命恢复效果，血量危急时价值最高）。
+     */
+    private static final List<Material> EMERGENCY_PRIORITY = List.of(
+            Material.ENCHANTED_GOLDEN_APPLE,
+            Material.GOLDEN_CARROT,
+            Material.COOKED_BEEF,
+            Material.COOKED_PORKCHOP,
+            Material.GOLDEN_APPLE,
+            Material.COOKED_MUTTON,
+            Material.COOKED_SALMON,
+            Material.COOKED_CHICKEN,
+            Material.COOKED_RABBIT,
+            Material.COOKED_COD,
+            Material.RABBIT_STEW,
+            Material.BREAD,
+            Material.BAKED_POTATO,
+            Material.BEETROOT_SOUP,
+            Material.MUSHROOM_STEW,
+            Material.PUMPKIN_PIE,
+            Material.CARROT,
+            Material.APPLE,
+            Material.BEETROOT,
+            Material.DRIED_KELP,
+            Material.MELON_SLICE,
+            Material.SWEET_BERRIES,
+            Material.GLOW_BERRIES,
+            Material.POTATO);
+
     private static final Set<Material> AVOID = EnumSet.of(
             Material.ROTTEN_FLESH,
             Material.SPIDER_EYE,
@@ -84,6 +119,39 @@ public final class FoodRules {
                 continue;
             }
             if (!allowValuable && VALUABLE.contains(material)) {
+                continue;
+            }
+            return material;
+        }
+        return null;
+    }
+
+    /**
+     * 血量危急时挑选食物：饱食度越高越优先，附魔金苹果最优先，贵重食物照吃不误。
+     *
+     * @param fullHunger 饥饿值是满的（20）——此时只有金苹果类还能吃，普通食物吃了也没用
+     */
+    public static Material pickEmergency(Inventory inventory, boolean fullHunger) {
+        if (inventory == null) {
+            return null;
+        }
+        for (Material candidate : EMERGENCY_PRIORITY) {
+            if (fullHunger && !ALWAYS_EDIBLE.contains(candidate)) {
+                continue;
+            }
+            if (contains(inventory, candidate)) {
+                return candidate;
+            }
+        }
+        if (fullHunger) {
+            return null;
+        }
+        for (ItemStack stack : inventory.getContents()) {
+            if (stack == null) {
+                continue;
+            }
+            Material material = stack.getType();
+            if (!material.isEdible() || AVOID.contains(material)) {
                 continue;
             }
             return material;

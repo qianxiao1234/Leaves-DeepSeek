@@ -147,6 +147,7 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
      *   <li>v2 -> v3：{@code deepseek.allow-global-api-key} 更名为 {@code deepseek.use-global-config}；</li>
      *   <li>v3 -> v4：砍树改用 {@code chop_tree}，{@code safety.log-leaf-radius} 旧默认值 5 改为 3。</li>
      *   <li>v4 -> v5：{@code combat.defense-radius} 旧默认值 10 改为 15（苦力怕改为主动远离）。</li>
+     *   <li>v5 -> v6：新增 {@code survival.emergency-eat-health}（血量 ≤ 该值时强制进食）。</li>
      * </ul>
      */
     private void migrateConfig() {
@@ -201,6 +202,17 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
             config.set("config-version", 5);
             changed = true;
             getLogger().info("config.yml 已升级到 v5：自动索敌半径 10 → 15 格（15 格内主动疾跑清怪，苦力怕改为主动远离）。");
+            version = 5;
+        }
+
+        if (version < 6) {
+            // 低血量强制进食（新增项，缺省时补上默认值）
+            if (!config.isSet("survival.emergency-eat-health")) {
+                config.set("survival.emergency-eat-health", 5);
+            }
+            config.set("config-version", 6);
+            changed = true;
+            getLogger().info("config.yml 已升级到 v6：新增 survival.emergency-eat-health（血量 ≤5 强制进食）。");
         }
 
         if (changed) {

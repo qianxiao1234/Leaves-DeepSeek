@@ -86,6 +86,7 @@ public final class PluginSettings {
     private boolean autoEat;
     private int eatThreshold;
     private int eatCheckIntervalSeconds;
+    private int emergencyEatHealth;
 
     private boolean persistEnabled;
     private int persistIntervalSeconds;
@@ -195,6 +196,7 @@ public final class PluginSettings {
         autoEat = config.getBoolean("survival.auto-eat", true);
         eatThreshold = Math.max(1, Math.min(19, config.getInt("survival.eat-threshold", 14)));
         eatCheckIntervalSeconds = Math.max(1, Math.min(60, config.getInt("survival.check-interval-seconds", 5)));
+        emergencyEatHealth = Math.max(0, Math.min(20, config.getInt("survival.emergency-eat-health", 5)));
 
         persistEnabled = config.getBoolean("persistence.enabled", true);
         persistIntervalSeconds = Math.max(5, Math.min(600, config.getInt("persistence.interval-seconds", 30)));
@@ -519,6 +521,13 @@ public final class PluginSettings {
 
     public int eatCheckIntervalSeconds() {
         return eatCheckIntervalSeconds;
+    }
+
+    /**
+     * 血量低于或等于该值时强制进食；0 表示关闭。
+     */
+    public int emergencyEatHealth() {
+        return emergencyEatHealth;
     }
 
     public boolean persistEnabled() {

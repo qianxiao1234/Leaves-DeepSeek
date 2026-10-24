@@ -608,11 +608,12 @@ public final class BotActions {
         }
         double ratio = bot.getHealth() / Math.max(1.0, bot.getMaxHealth());
         if (ratio < ThreatRules.HEALTH_RETREAT_RATIO) {
-            Material golden = goldenApple(bot.getInventory());
+            // 紧急进食：附魔金苹果最优先，其次按饱食度从高到低选
+            Material food = FoodRules.pickEmergency(bot.getInventory(), bot.getFoodLevel() >= 20);
             retreatAndEnd(fight, bot, focus, 8.0, false,
-                    golden == null ? "血量过低，先撤退" : "血量过低，已撤退并吃金苹果");
-            if (golden != null) {
-                eat(bot, golden, true);
+                    food == null ? "血量过低，先撤退" : "血量过低，已撤退并吃 " + food.name());
+            if (food != null) {
+                eat(bot, food, true);
             }
             return true;
         }
@@ -893,18 +894,6 @@ public final class BotActions {
         Location stand = target.getLocation().clone().add(away.multiply(range));
         stand.setY(bot.getLocation().getY());
         return stand;
-    }
-
-    private Material goldenApple(Inventory inventory) {
-        Material[] candidates = {Material.ENCHANTED_GOLDEN_APPLE, Material.GOLDEN_APPLE};
-        for (Material candidate : candidates) {
-            for (ItemStack stack : inventory.getContents()) {
-                if (stack != null && stack.getType() == candidate) {
-                    return candidate;
-                }
-            }
-        }
-        return null;
     }
 
     /**
