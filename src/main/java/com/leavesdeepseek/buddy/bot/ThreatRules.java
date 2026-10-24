@@ -28,6 +28,10 @@ public final class ThreatRules {
     public static final double CREEPER_DANGER_DISTANCE = 5.0;
     /** 苦力怕后退到的安全距离 */
     public static final double CREEPER_SAFE_DISTANCE = 6.5;
+    /** 发现苦力怕就主动躲开的半径（苦力怕会爆炸，不交战） */
+    public static final double CREEPER_DETECT_RADIUS = 10.0;
+    /** 躲苦力怕时要跑开的距离 */
+    public static final double CREEPER_FLEE_DISTANCE = 16.0;
 
     /** 不主动攻击（会引发群体仇恨 / 中立生物） */
     private static final Set<EntityType> PASSIVE = EnumSet.of(

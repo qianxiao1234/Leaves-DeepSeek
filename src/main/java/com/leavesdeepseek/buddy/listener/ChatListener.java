@@ -36,12 +36,17 @@ public final class ChatListener implements Listener {
             "^(你|快|赶紧|马上|请)*(过来|来我这|来我这里|来我身边|到这来|到我这来|来一下|来我这儿"
                     + "|come|comehere)(啊|吧|呀|哦|嘛|呗)*$");
     private static final Pattern STOP_PATTERN = Pattern.compile(
-            "^(你|快|赶紧|请)*(停下|停一下|站住|别动|别走了|待着|别跟了|不用跟了|停止跟随|stop|stay)(啊|吧|呀|哦|嘛)*$");
+            "^(你|快|赶紧|请)*(停下|停下来|停一下|停手|先停|先停下|停|站住|别动|别走了|待着|待在原地|原地待着"
+                    + "|别跟了|别跟着|别跟着我|不要跟着我|不要跟了|不用跟着我|不用跟着|不用跟了"
+                    + "|不许跟着我|不许跟了|停止跟随|别追了|松开我|别干了|别挖了|别砍了"
+                    + "|stop|stay|standstill)(了|啊|吧|呀|哦|嘛|呗|呢)*$");
 
     private final LeavesDeepSeekPlugin plugin;
     private final Map<UUID, Long> cooldowns = new ConcurrentHashMap<>();
     /** 玩家手动覆盖：true = 直听，false = 仅 @ 触发 */
     private final Map<UUID, Boolean> listenOverrides = new ConcurrentHashMap<>();
+    /** 已经提醒过「还没配 AI」的玩家，避免每句话都弹一次提示 */
+    private final java.util.Set<UUID> aiMissingWarned = ConcurrentHashMap.newKeySet();
 
     public ChatListener(LeavesDeepSeekPlugin plugin) {
         this.plugin = plugin;
@@ -62,6 +67,7 @@ public final class ChatListener implements Listener {
     public void clear(UUID playerId) {
         listenOverrides.remove(playerId);
         cooldowns.remove(playerId);
+        aiMissingWarned.remove(playerId);
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
@@ -111,6 +117,18 @@ public final class ChatListener implements Listener {
 
         // 高频指令直通：立刻执行，不等大模型（否则「跟着我」要排在上一次请求后面）
         if (handleQuickIntent(player, bot, body, botName)) {
+            return;
+        }
+
+        // 没有可用 AI 时假人仍然存在，但聊天不触发大模型，避免每句话都回一句「还没配置 AI」刷屏。
+        // 跟随/过来/停下这类直通指令在上面已经处理过了，不受影响。
+        if (!plugin.ai().resolve(player).usable()) {
+            plugin.log().info("聊天", "跳过：" + player.getName()
+                    + " 没有可用的 AI（假人仍可用 /buddy 命令操作）");
+            if (aiMissingWarned.add(player.getUniqueId())) {
+                player.sendActionBar(Text.component(
+                        "§e还没有配置 AI：/buddy set <apikey>，现在只能用 /buddy 命令控制假人"));
+            }
             return;
         }
 
@@ -221,9 +239,9 @@ public final class ChatListener implements Listener {
                             }));
                 }
                 case STOP -> {
-                    plugin.navigator().stopFollow(bot);
-                    plugin.botActions().interrupt(bot, "主人让你停下");
-                    reply(player, bot, botName, "好，我停下了。");
+                    // 与 /buddy stop 完全相同的一套逻辑：打断动作 + 关闭跟随
+                    plugin.stopBot(bot, "主人在聊天里说「停下」");
+                    reply(player, bot, botName, "好，停下了，也不再跟着你了。");
                 }
                 default -> {
                 }

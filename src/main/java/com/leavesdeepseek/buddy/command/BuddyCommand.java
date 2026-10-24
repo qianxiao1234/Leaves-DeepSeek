@@ -97,7 +97,8 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         Text.send(sender, "§f/" + label + " persona [set <描述>|reset] §7- 设置伙伴的人格与说话风格");
         Text.send(sender, "§f/" + label + " astrbot set <base-url> <api-key> [session-mode] §7- 对接你自己的 AstrBot");
         Text.send(sender, "§f/" + label + " ai set <default|astrbot|auto> §7- 选择默认使用的 AI 后端");
-        Text.send(sender, "§f/" + label + " global <reload|ai|astrbot|debug> §7- 修改全局配置（管理员）");
+        Text.send(sender, "§f/" + label + " global set <apikey> [model] [base-url] §7- 配置服务器全局 DeepSeek Key");
+        Text.send(sender, "§f/" + label + " global <reload|ai|astrbot|debug> §7- 修改其他全局配置（管理员）");
         Text.send(sender, "§f/" + label + " astrbot say <内容> §7- 向 AstrBot 提问并回复到聊天框");
         Text.send(sender, "§f/" + label + " stop §7- 停止伙伴的所有动作");
         Text.send(sender, "§f/" + label + " status §7- 查看伙伴状态");
@@ -121,47 +122,39 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         }
 
         ResolvedAi resolved = plugin.ai().resolve(player);
-        if (resolved.needsChoice()) {
-            Text.send(player, "§e你同时配置了 DeepSeek 和 AstrBot，需要先选择默认模型：");
-            Text.send(player, "§f/buddy ai set default §7- 使用 DeepSeek（可操作假人）");
-            Text.send(player, "§f/buddy ai set astrbot §7- 使用 AstrBot（纯聊天）");
-            return;
-        }
-        if (!resolved.usable()) {
-            Text.send(player, "§c你还没有可用的 AI：");
-            Text.send(player, "§7DeepSeek：§f/buddy set <apikey> [model] [base-url]");
-            Text.send(player, "§7AstrBot：请让管理员执行 §f/buddy global astrbot set <base-url> <api-key>");
-            return;
-        }
-        if (resolved.astrBot()) {
-            doSpawn(player, args);
-            return;
-        }
-
-        // DeepSeek：用全局 Key 时不需要玩家自己验证；用个人 Key 时后台自动验证一次
-        if (resolved.validated()) {
-            doSpawn(player, args);
-            return;
-        }
-        Text.send(player, "§7正在验证 " + resolved.keySource().label() + "……");
-        plugin.ai().resolveValidated(player).whenComplete((validated, error) ->
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (error != null || !validated.deepSeek()) {
-                        String reason = error != null ? Json.rootMessage(error) : validated.reason();
-                        Text.send(player, "§cAI 配置验证失败：" + reason);
-                        if (validated.keySource() == ResolvedAi.KeySource.OWN) {
-                            Text.send(player, "§7请重新执行 §f/buddy set <apikey> [model] [base-url]");
-                        } else {
-                            Text.send(player, "§7这是服务器全局 Key，请联系服主检查 config.yml 的 deepseek.api-key");
+        boolean aiReady = resolved.usable();
+        if (!aiReady) {
+            // 没有 AI 也能创建假人：跟随/过来/待命/睡觉/吃东西/看状态这些命令都不需要大模型
+            if (resolved.needsChoice()) {
+                Text.send(player, "§e你同时配置了 DeepSeek 和 AstrBot，聊天前需要先选一个默认后端：");
+                Text.send(player, "§f/buddy ai set default §7- 使用 DeepSeek（可操作假人）");
+                Text.send(player, "§f/buddy ai set astrbot §7- 使用 AstrBot（纯聊天）");
+            } else {
+                Text.send(player, "§e注意：你还没有可用的 AI，假人照样能创建，只是暂时只能用命令控制：");
+                Text.send(player, "§7  §f/buddy follow §7跟随 | §f/buddy come §7过来 | §f/buddy stay §7待命");
+                Text.send(player, "§7  §f/buddy sleep §7睡觉 | §f/buddy eat §7吃东西 | §f/buddy status §7看状态");
+                Text.send(player, "§7想让它听懂自然语言、自己动手：§f/buddy set <apikey> [model] [base-url]");
+                Text.send(player, "§7（或者让服主用 §f/buddy global set <apikey>§7 配一个全局 Key）");
+            }
+        } else if (!resolved.astrBot() && !resolved.validated()) {
+            // 后台验证一次，只做提示，不阻塞创建
+            Text.send(player, "§7正在后台验证 " + resolved.keySource().label() + "……");
+            plugin.ai().resolveValidated(player).whenComplete((validated, error) ->
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (error != null || !validated.deepSeek()) {
+                            String reason = error != null ? Json.rootMessage(error) : validated.reason();
+                            Text.send(player, "§cAI 验证失败：" + reason);
+                            Text.send(player, "§7假人已经创建，仍可用 §f/buddy§7 命令操作；修好 Key 后聊天功能会自动生效。");
+                            return;
                         }
-                        return;
-                    }
-                    Text.send(player, "§aAI 配置验证通过（" + validated.keySource().label() + "）。");
-                    doSpawn(player, args);
-                }));
+                        Text.send(player, "§aAI 配置验证通过（" + validated.keySource().label()
+                                + "），可以直接聊天指挥了。");
+                    }));
+        }
+        doSpawn(player, args, aiReady);
     }
 
-    private void doSpawn(Player player, String[] args) {
+    private void doSpawn(Player player, String[] args, boolean aiReady) {
         String name = args.length > 1 ? args[1] : null;
         String skin = args.length > 2 ? args[2] : null;
         Text.send(player, "§7正在创建伙伴假人……");
@@ -177,7 +170,12 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                         return;
                     }
                     Text.send(player, "§a伙伴 §f" + BotNames.rawName(bot) + " §a已上线！");
-                    Text.send(player, "§7直接聊天就能指挥我；想暂时关掉直听用 §f/buddy listen off§7。");
+                    if (aiReady) {
+                        Text.send(player, "§7直接聊天就能指挥我；想暂时关掉直听用 §f/buddy listen off§7。");
+                    } else {
+                        Text.send(player, "§7目前还不能听懂聊天（没有 AI），请用 §f/buddy follow §7/"
+                                + " §f/buddy come §7/ §f/buddy stay §7等命令。");
+                    }
                     if (plugin.profiles().autoFollow(player)) {
                         plugin.navigator().follow(bot, player, plugin.settings().followDistance());
                     }
@@ -547,6 +545,10 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         if (astrError != null && !astrError.isBlank()) {
             Text.send(player, "§c最近一次 AstrBot 失败：§7" + oneLine(astrError));
         }
+        if (!resolved.usable()) {
+            Text.send(player, "§7提示：没有 AI 也可以创建假人，"
+                    + "用 §f/buddy follow|come|stay|sleep|eat|status §7等命令操作它。");
+        }
         Text.send(player, "§7切换：§f/buddy ai set <default|astrbot|auto>");
     }
 
@@ -776,8 +778,9 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             case "debug" -> globalDebug(sender, args);
             case "ai" -> globalAi(sender, args);
             case "astrbot" -> globalAstrBot(sender, args);
+            case "set" -> globalSet(sender, args);
             default -> {
-                Text.send(sender, "§c用法：§f/buddy global <reload|debug|ai|astrbot>");
+                Text.send(sender, "§c用法：§f/buddy global <set|reload|debug|ai|astrbot>");
                 Text.send(sender, "§7全局配置只能通过 /buddy global 修改，玩家个人设置请用 /buddy astrbot、/buddy ai。");
             }
         }
@@ -785,18 +788,121 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
 
     private void globalStatus(CommandSender sender) {
         AstrBotConfig config = globalAstrBotConfig();
+        ApiConfig deepSeek = plugin.ai().globalApi();
         Text.send(sender, "§8§m----------§r §b全局配置 §8§m----------");
         Text.send(sender, "§7配置版本：§f" + plugin.getConfig().getInt("config-version", 1));
         Text.send(sender, "§7默认 AI 后端：§f" + backendLabel(plugin.settings().aiBackend()));
         Text.send(sender, "§7调试日志：§f" + (plugin.settings().debug() ? "开" : "关"));
+        Text.send(sender, "§7DeepSeek 全局 Key：§f" + (deepSeek == null
+                ? "未配置（" + (plugin.settings().useGlobalConfig() ? "玩家需用自己的 Key" : "已禁止全局 Key") + "）"
+                : deepSeek.maskedKey() + " §7" + (plugin.ai().isGlobalValidated(deepSeek) ? "§a已验证" : "§e未验证")));
+        if (deepSeek != null) {
+            Text.send(sender, "§7  模型：§f" + deepSeek.model() + " §7地址：§f" + plugin.client().endpointOf(deepSeek));
+        }
         Text.send(sender, "§7AstrBot 默认：§f" + (config.usable() ? "可用" : "不可用"));
         Text.send(sender, "§7地址：§f" + config.baseUrl()
                 + " §7Key：§f" + config.maskedKey()
                 + " §7会话：§f" + config.mode());
-        Text.send(sender, "§7修改：§f/buddy global astrbot set <base-url> <api-key> [session-mode]");
+        Text.send(sender, "§7修改：§f/buddy global set <apikey> [model] [base-url] §7| §f/buddy global set clear");
+        Text.send(sender, "§7       §f/buddy global astrbot set <base-url> <api-key> [session-mode]");
         Text.send(sender, "§7       §f/buddy global ai set <auto|deepseek|astrbot>");
         Text.send(sender, "§7       §f/buddy global debug on|off §7| §f/buddy global reload");
-        Text.send(sender, "§7玩家的个人 AstrBot Key / AI 偏好保存在 §fplayers/<uuid>/config.yml§7，优先于全局。");
+        Text.send(sender, "§7玩家的个人 Key / AstrBot / AI 偏好保存在 §fplayers/<uuid>/config.yml§7，优先于全局。");
+    }
+
+    /**
+     * 设置服务器全局 DeepSeek Key：写进插件根目录 config.yml 的 deepseek.*，
+     * 只允许管理员通过 /buddy global 修改。
+     * <p>用法：/buddy global set &lt;apikey&gt; [model] [base-url]，/buddy global set clear 清除。</p>
+     */
+    private void globalSet(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            Text.send(sender, "§7用法：§f/buddy global set <apikey> [model] [base-url]");
+            Text.send(sender, "§7model / base-url 不填或填 §fdefault§7，表示沿用 config.yml 里现有的 deepseek.* 值。");
+            Text.send(sender, "§7填写 base-url 时必须同时填写 model。");
+            Text.send(sender, "§7清除全局 Key：§f/buddy global set clear");
+            return;
+        }
+
+        String key = args[2].trim();
+        if (key.equalsIgnoreCase("clear") || key.equalsIgnoreCase("none")) {
+            plugin.getConfig().set("deepseek.api-key", "");
+            plugin.saveConfig();
+            plugin.ai().clearGlobalValidation();
+            plugin.reloadPlugin();
+            plugin.log().info("配置", "管理员 " + sender.getName() + " 清除了服务器全局 DeepSeek Key");
+            Text.send(sender, "§a已清除服务器全局 DeepSeek Key，玩家需要用自己的 Key（/buddy set）。");
+            return;
+        }
+        if (key.isEmpty() || key.equalsIgnoreCase("default")) {
+            Text.send(sender, "§cAPI Key 不能为空（要清除请用 §f/buddy global set clear§c）。");
+            return;
+        }
+
+        String model = args.length > 3 ? args[3].trim() : "default";
+        String baseUrl = args.length > 4 ? args[4].trim() : "default";
+
+        if (args.length == 4 && looksLikeUrl(model)) {
+            Text.send(sender, "§c如果填写 base-url，必须同时填写 model：");
+            Text.send(sender, "§f/buddy global set <apikey> <model> <base-url>");
+            return;
+        }
+        boolean defaultModel = PlayerProfiles.isDefault(model);
+        boolean defaultBaseUrl = PlayerProfiles.isDefault(baseUrl);
+        if (!defaultBaseUrl && defaultModel) {
+            Text.send(sender, "§c填写 base-url 时必须同时填写 model。");
+            return;
+        }
+        if (!defaultBaseUrl && !looksLikeUrl(baseUrl)) {
+            Text.send(sender, "§cbase-url 必须以 http:// 或 https:// 开头。");
+            return;
+        }
+
+        String previousKey = plugin.settings().apiKey();
+        boolean wasEnabled = plugin.settings().useGlobalConfig();
+        plugin.getConfig().set("deepseek.api-key", key);
+        if (!defaultModel) {
+            plugin.getConfig().set("deepseek.model", model);
+        }
+        if (!defaultBaseUrl) {
+            plugin.getConfig().set("deepseek.base-url", PlayerProfiles.normalizeBaseUrl(baseUrl));
+        }
+        if (!wasEnabled) {
+            // 填了全局 Key 却因为开关关闭不生效会很困惑，这里自动打开并告知
+            plugin.getConfig().set("deepseek.use-global-config", true);
+        }
+        plugin.saveConfig();
+        plugin.reloadPlugin();
+
+        ApiConfig api = plugin.ai().globalApi();
+        if (api == null) {
+            Text.send(sender, "§c配置不完整，请检查 api key / model / base-url。");
+            return;
+        }
+        if (!wasEnabled) {
+            Text.send(sender, "§e已自动打开 §fdeepseek.use-global-config§e（否则全局 Key 不会生效）。");
+        }
+        if (!previousKey.equals(key)) {
+            // 换了 Key，旧的验证结果作废
+            plugin.ai().clearGlobalValidation();
+        }
+        plugin.log().info("配置", "管理员 " + sender.getName() + " 更新了全局 DeepSeek Key（模型 "
+                + api.model() + "，地址 " + plugin.client().endpointOf(api) + "）");
+        Text.send(sender, "§7已写入全局配置，正在验证 Key（模型 " + api.model() + "，地址 "
+                + plugin.client().endpointOf(api) + "）……");
+        plugin.client().validate(api).whenComplete((ignored, error) ->
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (error != null) {
+                        plugin.ai().setGlobalValidated(api, false);
+                        Text.send(sender, "§c验证失败：" + Json.rootMessage(error));
+                        Text.send(sender, "§7Key 已保存但标记为无效，检查后重新执行 /buddy global set。");
+                        return;
+                    }
+                    plugin.ai().setGlobalValidated(api, true);
+                    Text.send(sender, "§a服务器全局 DeepSeek Key 验证通过！模型：§f" + api.model()
+                            + " §7地址：§f" + api.baseUrl());
+                    Text.send(sender, "§7没有个人 Key 的玩家现在会自动使用它（§f/buddy global§7 可查看）。");
+                }));
     }
 
     private void globalDebug(CommandSender sender, String[] args) {
@@ -1085,9 +1191,8 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         if (bot == null) {
             return;
         }
-        plugin.navigator().cancel(bot);
-        plugin.bots().stopAllActions(bot);
-        Text.send(player, "§7已经停下。");
+        plugin.stopBot(bot, "主人用 /buddy stop 停止了所有动作");
+        Text.send(player, "§7已经停下，跟随也关了（想让它再跟上：说「跟着我」或 §f/buddy follow§7）。");
     }
 
     private void status(CommandSender sender) {
@@ -1108,6 +1213,9 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                 + " §7距离主人：§f" + Json.getDouble(state, "owner_distance", 0));
         Text.send(player, "§7主手：§f" + Json.getString(state, "held_item", "empty"));
         Text.send(player, "§7动作：§f" + plugin.bots().actionNames(bot));
+        Text.send(player, "§7跟随：§f" + (plugin.navigator().isFollowDisabled(bot)
+                ? "§7已关闭（说「跟着我」或 /buddy follow 重新开启）"
+                : (plugin.navigator().isFollowing(bot) ? "§a开启" : "§7未开启")));
         ResolvedAi stateAi = plugin.ai().resolve(player);
         Text.send(player, "§7AI 后端：§f" + stateAi.backend().label()
                 + " §7（偏好：§f" + backendLabel(stateAi.preference())
@@ -1214,7 +1322,10 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return List.of("per-player", "fixed", "per-message");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("global")) {
-            return List.of("reload", "debug", "ai", "astrbot");
+            return List.of("set", "reload", "debug", "ai", "astrbot");
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("global") && args[1].equalsIgnoreCase("set")) {
+            return List.of("clear");
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("global") && args[1].equalsIgnoreCase("debug")) {
             return List.of("on", "off");

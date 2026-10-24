@@ -38,7 +38,8 @@ public final class CombatTools {
         Schema schema = Schema.object()
                 .str("entity_type", "可选的实体类型名，例如 ZOMBIE、SKELETON；不填则攻击最近的敌对生物")
                 .integer("radius", "搜索半径，默认 8，最大 16");
-        return Tools.of("attack_nearest", "走近并攻击附近最近的生物（不会主动攻击玩家）。", schema, (context, arguments) -> {
+        return Tools.of("attack_nearest", "走近并攻击附近最近的生物（不会主动攻击玩家；苦力怕会爆炸，不会被选为目标）。",
+                schema, (context, arguments) -> {
             Bot bot = context.bot();
             int radius = Math.max(1, Math.min(16, Json.getInt(arguments, "radius", 8)));
             String typeName = Json.getString(arguments, "entity_type", "");
@@ -52,6 +53,10 @@ public final class CombatTools {
                     continue;
                 }
                 if (ThreatRules.isPassive(living.getType())) {
+                    continue;
+                }
+                if (ThreatRules.isCreeper(living.getType())) {
+                    // 苦力怕近战硬砍等于自爆，默认跳过
                     continue;
                 }
                 if (!typeName.isBlank() && !living.getType().name().equalsIgnoreCase(typeName.trim())) {

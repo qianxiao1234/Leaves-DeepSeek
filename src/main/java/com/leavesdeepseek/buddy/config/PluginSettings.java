@@ -181,7 +181,7 @@ public final class PluginSettings {
         miningPickupRadius = Math.max(1, Math.min(16, config.getInt("mining.pickup-radius", 5)));
 
         autoDefense = config.getBoolean("combat.auto-defense", true);
-        defenseRadius = Math.max(3, Math.min(64, config.getInt("combat.defense-radius", 10)));
+        defenseRadius = Math.max(3, Math.min(64, config.getInt("combat.defense-radius", 15)));
         defendOwner = config.getBoolean("combat.defend-owner", true);
         defendOwnerRadius = Math.max(4, Math.min(256, config.getInt("combat.defend-owner-radius", 50)));
         combatCheckIntervalTicks = Math.max(10, Math.min(100, config.getInt("combat.check-interval-ticks", 20)));

@@ -56,8 +56,8 @@ public final class BotActions {
     private static final double ATTACK_REACH = 2.9;
     /** 安全判定频率：每隔多少 tick 检查一次血量/苦力怕/地形。 */
     private static final int SAFETY_INTERVAL_TICKS = 4;
-    /** 连续追不到目标的 tick 上限。 */
-    private static final int MAX_CHASE_TICKS = 100;
+    /** 连续追不到目标的 tick 上限。15 格开外疾跑追过去也要时间，给足 8 秒 */
+    private static final int MAX_CHASE_TICKS = 160;
     private static final long COMBAT_TIMEOUT_MS = 30_000L;
     private static final Random RANDOM = new Random();
     private static final List<BlockFace> FACES = List.of(
@@ -471,6 +471,11 @@ public final class BotActions {
         if (ThreatRules.isPassive(target.getType())) {
             return done(Json.error("这是中立生物，不主动攻击（避免群体仇恨）"));
         }
+        if (ThreatRules.isCreeper(target.getType())) {
+            // 苦力怕会爆炸，近战硬砍等于自爆；让上层改成跑开
+            return done(Json.obj("ok", false, "retreat", true,
+                    "error", "苦力怕会爆炸，我不会去砍它，先离它远一点").toString());
+        }
         if (bot == null || !bot.isValid()) {
             return done(Json.error("假人已离线"));
         }
@@ -626,6 +631,13 @@ public final class BotActions {
                 return true;
             }
         }
+        // 战斗途中只要有苦力怕靠近，立刻脱离战斗跑开（爆炸比任何怪都危险）
+        LivingEntity nearbyCreeper = nearestCreeper(bot, ThreatRules.CREEPER_DETECT_RADIUS);
+        if (nearbyCreeper != null) {
+            retreatAndEnd(fight, bot, nearbyCreeper, ThreatRules.CREEPER_FLEE_DISTANCE, false,
+                    "附近有苦力怕，先跑开");
+            return true;
+        }
         if (WeaponRules.bestSlot(bot.getInventory()) < 0) {
             retreatAndEnd(fight, bot, focus, 8.0, false, "没有可用的武器，先撤退");
             return true;
@@ -657,6 +669,10 @@ public final class BotActions {
         Location stand = standPoint(bot, focus, Math.max(1.0, ATTACK_REACH - 1.0));
         if (stand == null || stand.getWorld() == null) {
             return;
+        }
+        // 疾跑追击：走路太慢，15 格外的怪还没到就跑掉了
+        if (!bot.isSprinting()) {
+            bot.setSprinting(true);
         }
         if (fight.moving && navigator.isNavigating(bot) && fight.navGoal != null
                 && fight.navGoal.distanceSquared(stand) <= 4.0) {
@@ -701,10 +717,36 @@ public final class BotActions {
         if (entity instanceof Player || !(entity instanceof Enemy)) {
             return false;
         }
+        if (ThreatRules.isCreeper(entity.getType())) {
+            // 苦力怕绝不主动砍：顺带命中苦力怕也是自杀
+            return false;
+        }
         if (entity instanceof Tameable tameable && tameable.isTamed()) {
             return false;
         }
         return !ThreatRules.isPassive(entity.getType());
+    }
+
+    private LivingEntity nearestCreeper(Bot bot, double radius) {
+        World world = bot.getWorld();
+        if (world == null) {
+            return null;
+        }
+        LivingEntity best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Entity entity : world.getNearbyEntities(bot.getLocation(), radius, radius, radius)) {
+            if (!(entity instanceof LivingEntity living)
+                    || !ThreatRules.isCreeper(entity.getType())
+                    || !living.isValid() || living.isDead()) {
+                continue;
+            }
+            double distance = living.getLocation().distanceSquared(bot.getLocation());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = living;
+            }
+        }
+        return best;
     }
 
     private void swing(Bot bot, LivingEntity victim) {
@@ -876,14 +918,17 @@ public final class BotActions {
         if (safe == null) {
             return CompletableFuture.completedFuture(false);
         }
-        bot.setSprinting(false);
+        bot.setSprinting(!sneak);
         if (sneak) {
             bot.setSneaking(true);
         }
         return navigator.navigateAndWait(bot, safe, 1.5, 140)
                 .whenComplete((arrived, error) -> Tasks.onMain(plugin, () -> {
-                    if (bot.isValid() && sneak) {
-                        bot.setSneaking(false);
+                    if (bot.isValid()) {
+                        bot.setSprinting(false);
+                        if (sneak) {
+                            bot.setSneaking(false);
+                        }
                     }
                     return null;
                 }));

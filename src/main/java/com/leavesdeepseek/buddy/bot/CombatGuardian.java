@@ -149,6 +149,13 @@ public final class CombatGuardian implements Listener {
             return;
         }
 
+        // 苦力怕：不交战，看到就逆着它跑开（会爆炸，站撸等于自爆）
+        LivingEntity creeper = findNearestCreeper(bot, ThreatRules.CREEPER_DETECT_RADIUS);
+        if (creeper != null) {
+            avoidCreeper(owner, bot, creeper);
+            return;
+        }
+
         // 被 4 只以上围攻：撤退
         if (countAttackers(bot, ThreatRules.GROUP_RADIUS) >= ThreatRules.GROUP_RETREAT_COUNT) {
             groupRetreat(owner, bot);
@@ -294,7 +301,9 @@ public final class CombatGuardian implements Listener {
         LivingEntity best = null;
         double bestDistance = Double.MAX_VALUE;
         for (Entity entity : bot.getNearbyEntities(radius, radius, radius)) {
-            if (!isHostile(entity) || ThreatRules.isSneakAvoid(entity.getType())) {
+            if (!isHostile(entity) || ThreatRules.isSneakAvoid(entity.getType())
+                    || ThreatRules.isCreeper(entity.getType())) {
+                // 苦力怕不列入攻击目标，走上面的主动规避逻辑
                 continue;
             }
             double distance = entity.getLocation().distanceSquared(bot.getLocation());
@@ -423,6 +432,46 @@ public final class CombatGuardian implements Listener {
             }
         }
         return best;
+    }
+
+    private LivingEntity findNearestCreeper(Bot bot, double radius) {
+        LivingEntity best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Entity entity : bot.getNearbyEntities(radius, radius, radius)) {
+            if (!(entity instanceof LivingEntity living)
+                    || !ThreatRules.isCreeper(entity.getType())
+                    || !living.isValid() || living.isDead()) {
+                continue;
+            }
+            double distance = entity.getLocation().distanceSquared(bot.getLocation());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = living;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * 看到苦力怕就跑：不交战、不靠近。
+     * <p>苦力怕爆炸即使没炸死也会炸掉半个地形，所以直接跑到
+     * {@link ThreatRules#CREEPER_FLEE_DISTANCE} 格外再恢复跟随。</p>
+     */
+    private void avoidCreeper(Player owner, Bot bot, LivingEntity creeper) {
+        UUID botId = bot.getUniqueId();
+        if (!fleeing.add(botId)) {
+            return;
+        }
+        if (plugin.settings().debug()) {
+            plugin.getLogger().info("躲苦力怕：" + BotNames.rawName(bot)
+                    + " 距离 " + Math.round(bot.getLocation().distance(creeper.getLocation())) + " 格");
+        }
+        plugin.botActions().retreatFrom(bot, creeper, ThreatRules.CREEPER_FLEE_DISTANCE, false)
+                .whenComplete((arrived, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                    fleeing.remove(botId);
+                    cooldowns.put(botId, System.currentTimeMillis() + 3000L);
+                    resumeFollow(owner, bot);
+                }));
     }
 
     private int countAttackers(Bot bot, double radius) {

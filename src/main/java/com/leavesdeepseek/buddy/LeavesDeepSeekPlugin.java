@@ -9,6 +9,7 @@ import com.leavesdeepseek.buddy.ai.ToolRegistry;
 import com.leavesdeepseek.buddy.bot.ArmorKeeper;
 import com.leavesdeepseek.buddy.bot.AutoEater;
 import com.leavesdeepseek.buddy.bot.BotActions;
+import com.leavesdeepseek.buddy.bot.BotNames;
 import com.leavesdeepseek.buddy.bot.BotNavigator;
 import com.leavesdeepseek.buddy.bot.BotService;
 import com.leavesdeepseek.buddy.bot.BotStateService;
@@ -145,6 +146,7 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
      *   <li>v1 -> v2：战斗半径旧默认值 12/100 改为 10/50（只改仍是旧默认值的项）；</li>
      *   <li>v2 -> v3：{@code deepseek.allow-global-api-key} 更名为 {@code deepseek.use-global-config}；</li>
      *   <li>v3 -> v4：砍树改用 {@code chop_tree}，{@code safety.log-leaf-radius} 旧默认值 5 改为 3。</li>
+     *   <li>v4 -> v5：{@code combat.defense-radius} 旧默认值 10 改为 15（苦力怕改为主动远离）。</li>
      * </ul>
      */
     private void migrateConfig() {
@@ -188,6 +190,17 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
             config.set("config-version", 4);
             changed = true;
             getLogger().info("config.yml 已升级到 v4：砍树改用 chop_tree，树叶判定半径 5 → 3（防止误拆村民房子）。");
+            version = 4;
+        }
+
+        if (version < 5) {
+            // 自动索敌半径旧默认值 10 → 15（只改仍是旧默认值的项）
+            if (config.getInt("combat.defense-radius", 15) == 10) {
+                config.set("combat.defense-radius", 15);
+            }
+            config.set("config-version", 5);
+            changed = true;
+            getLogger().info("config.yml 已升级到 v5：自动索敌半径 10 → 15 格（15 格内主动疾跑清怪，苦力怕改为主动远离）。");
         }
 
         if (changed) {
@@ -325,6 +338,29 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
 
     public boolean isShuttingDown() {
         return shuttingDown;
+    }
+
+    /**
+     * 停止假人的全部动作并关闭跟随。
+     * <p>`/buddy stop` 和聊天里说「停下」共用这一套逻辑，保证两条入口行为完全一致：
+     * 打断挖掘/放置/砍树/战斗、取消导航、关闭粘性跟随（之后只有「跟着我」才会重新打开）。</p>
+     */
+    public void stopBot(Bot bot, String reason) {
+        if (bot == null) {
+            return;
+        }
+        if (navigator != null) {
+            navigator.stopFollow(bot);
+        }
+        if (botActions != null) {
+            botActions.interrupt(bot, reason == null ? "主人让你停下" : reason);
+        } else if (bots != null) {
+            bots.stopAllActions(bot);
+        }
+        if (log != null) {
+            log.info("命令", "停止全部动作 | 假人=" + BotNames.rawName(bot)
+                    + " | 原因=" + (reason == null ? "-" : reason));
+        }
     }
 
     public BotStateService botStates() {

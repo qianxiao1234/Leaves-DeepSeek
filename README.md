@@ -17,10 +17,11 @@
 ## 功能
 
 - **DeepSeek Function Calling 驱动**：模型自己决定调用哪些工具、按什么顺序执行。
+- **不配 AI 也能用**：假人创建、跟随/过来/待命/睡觉/进食/护主/穿盔甲全部不依赖大模型，只有「自然语言指挥它自己干活」需要 Key。
 - **完整的玩家式操作**：`move_to` / `mine_block` / `place_block` / `attack_nearest` / `use_item` / `fish` / `sneak` / `swim` …
 - **A\* 寻路 + 玩家输入**：使用 Leaves 的 `MoveAction`（前进输入）、`JumpAction`、转向，不传送、不飞行。
 - **持续跟随**：主人走远时自动跟上，卡住会自动重新规划路线。
-- **自动战斗**：普通敌对生物直接站撸（靠近到 3 格内停步、面向目标、每 12 tick 攻击一次，战斗时自动关闭前进/疾跑）；自动按 DPS 选武器（含附魔，耐久 <10% 跳过），有盾牌自动放副手；苦力怕进入 5 格先拉开距离，坚守者潜行离开，末影人/僵尸猪灵/狼/铁傀儡不主动攻击；血量 <30% 撤退吃金苹果，30%~60% 边打边吃，饥饿 <6 先吃；被 4 只以上围攻时撤退；战斗后自动拾取掉落物，并尽量避开边缘/水边/岩浆边。
+- **自动战斗**：15 格内的敌对生物会主动**疾跑**过去清掉（靠近到 3 格内停步、面向目标、每 12 tick 攻击一次）；自动按 DPS 选武器（含附魔，耐久 <10% 跳过），有盾牌自动放副手；**看到苦力怕（10 格内）直接疾跑远离、不会去打**，坚守者潜行离开，末影人/僵尸猪灵/狼/铁傀儡不主动攻击；血量 <30% 撤退吃金苹果，30%~60% 边打边吃，饥饿 <6 先吃；被 4 只以上围攻时撤退；战斗后自动拾取掉落物，并尽量避开边缘/水边/岩浆边。
 - **AstrBot 对接**：可接入 [AstrBot OpenAPI](https://docs.astrbot.app/dev/openapi.html)，用 `/buddy astrbot say` 直接向 AstrBot 提问，模型也可以调用 `ask_astrbot` 咨询服务器规则。
 - **空闲小动作**：空闲时较高频率（默认每 8 秒 35% 概率）在主人身边 2 格内随机走动。
 - **挖矿自动拾取**：挖完方块会主动走近捡起掉落物，并核对 `expected / collected / missing` 数量。
@@ -110,12 +111,13 @@ players/<uuid>/
 
 > **配置归属规则**：`plugins/LeavesDeepSeek/config.yml` 是全局配置，**只能**通过 `/buddy global ...` 修改；`/buddy set`、`/buddy astrbot ...`、`/buddy ai set`、`/buddy persona` 等只会写入 `players/<uuid>/config.yml`。
 
-> 服务器 `config.yml` 里的 `deepseek.use-global-config`（默认 `true`）控制全局 Key 是否可以被玩家直接使用。`deepseek.api-key` 默认为空，所以默认情况下所有玩家只能用自己 `/buddy set` 的 Key；只有服主主动填入全局 Key 后，没有个人 Key 的玩家才会自动使用它。
+> 服务器 `config.yml` 里的 `deepseek.use-global-config`（默认 `true`）控制全局 Key 是否可以被玩家直接使用。`deepseek.api-key` 默认为空，所以默认情况下所有玩家只能用自己 `/buddy set` 的 Key；只有服主用 `/buddy global set <apikey>` 填入全局 Key 后，没有个人 Key 的玩家才会自动使用它。
 
 **使用 DeepSeek 时需要一把可用的 Key（自己的，或服主开放的全局 Key）：**
 
 ```text
-/buddy set <apikey> [model] [base-url]
+/buddy set <apikey> [model] [base-url]          # 玩家自己的 Key（写入 players/<uuid>/config.yml）
+/buddy global set <apikey> [model] [base-url]   # 服务器全局 Key（管理员，写入 config.yml）
 ```
 
 - `apikey` 必填；
@@ -167,9 +169,21 @@ deepseek:
 
 修改后执行 `/buddy reload` 生效。
 
-全局 `config.yml` 中还可以放一把服务器统一使用的 Key（默认留空，只有服主主动填写后才生效）：
+全局 `config.yml` 中还可以放一把服务器统一使用的 Key（默认留空，只有服主主动填写后才生效）。
+管理员用命令写入即可，不需要手改文件：
+
+```text
+/buddy global set <apikey> [model] [base-url]   # 写入全局 Key 并立即验证
+/buddy global set clear                         # 清除全局 Key
+```
+
+- `model` / `base-url` 不填或填 `default` 时，沿用 `config.yml` 里现有的 `deepseek.model` / `deepseek.base-url`；
+- 填写 `base-url` 时必须同时填写 `model`；
+- 如果 `deepseek.use-global-config` 是关闭的，设置 Key 时会自动打开（否则全局 Key 不生效，命令会提示）；
+- 只有拥有 `leavesdeepseek.admin` 权限的人能用，命令只写全局 `config.yml`，玩家个人设置仍然用 `/buddy set`。
 
 ```yaml
+# 等价于执行 /buddy global set 后 config.yml 的变化
 deepseek:
   api-key: ""              # 留空 = 不提供全局 Key
   use-global-config: true  # 允许没有个人 Key 的玩家使用上面的全局 Key
@@ -228,11 +242,11 @@ mining:
 
 combat:
   auto-defense: true         # 自动反击附近敌对生物
-  defense-radius: 10         # 自动索敌半径（格）
+  defense-radius: 15         # 自动索敌半径（格），这范围内的敌对生物会主动疾跑清掉
   defend-owner: true         # 主人被攻击时护主
   defend-owner-radius: 50    # 假人在主人 50 格内才会护主
   check-interval-ticks: 20
-  avoid-mobs: []             # 额外不交战的生物（苦力怕/坚守者/末影人等已按类型处理）
+  avoid-mobs: []             # 额外不交战的生物（苦力怕/坚守者/末影人等已按类型处理：苦力怕主动远离，坚守者潜行离开）
   avoid-radius: 12           # 发现额外规避生物时多少格内开始撤退
 
 survival:
@@ -294,7 +308,9 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 
 | 全局命令（`leavesdeepseek.admin`） | 说明 |
 | --- | --- |
-| `/buddy global` | 查看全局配置（默认后端、全局 AstrBot、调试开关） |
+| `/buddy global` | 查看全局配置（默认后端、全局 DeepSeek Key、全局 AstrBot、调试开关） |
+| `/buddy global set <apikey> [model] [base-url]` | 设置服务器全局 DeepSeek Key（写入 `config.yml` 并验证） |
+| `/buddy global set clear` | 清除服务器全局 DeepSeek Key |
 | `/buddy global astrbot set <base-url> <api-key> [session-mode]` | 设置服务器全局 AstrBot 默认 |
 | `/buddy global astrbot on\|off\|test\|status\|session\|clear` | 管理全局 AstrBot |
 | `/buddy global ai set <auto\|deepseek\|astrbot>` | 设置全局默认 AI 后端 |
@@ -320,27 +336,33 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 
 > AstrBot 只负责对话。把默认后端设为 AstrBot 后，伙伴仍会跟随、护主、自动进食等，但**不会执行模型指令里的挖矿/放置/战斗等工具动作**（AstrBot 无法调用本插件的工具）。需要它动手干活时请用 `/buddy ai set default` 切回 DeepSeek。
 
+> **没有 AI 也能用**：`/buddy spawn` 不再强制要求 Key。没有可用的 DeepSeek / AstrBot 时，假人照样能创建、
+> 自动跟随主人、护主、自动进食、穿盔甲，也可以用 `/buddy follow`、`/buddy come`、`/buddy stay`、
+> `/buddy sleep`、`/buddy eat`、`/buddy status` 等命令直接操作；只是不能通过自然语言指挥它自己干活。
+> 配好 Key 后无需重新创建假人，聊天功能会立即生效。
+
 ## 使用
 
 | 命令 | 说明 |
 | --- | --- |
-| `/buddy set <apikey> [model] [base-url]` | 配置并验证你自己的 API Key（创建假人前必须完成） |
-| `/buddy spawn [名字] [皮肤名]` | 创建你的伙伴假人 |
+| `/buddy set <apikey> [model] [base-url]` | 配置并验证你自己的 API Key（不配也能用命令操作假人） |
+| `/buddy spawn [名字] [皮肤名]` | 创建你的伙伴假人（不需要先配 AI） |
 | `/buddy task <自然语言>` | 给伙伴下达任务（核心） |
 | `/buddy say <内容>` | 让伙伴在聊天栏说话 |
 | `/buddy come` | 让伙伴走过来 |
 | `/buddy follow` | 持续跟随 |
-| `/buddy stay` | 原地待命 |
+| `/buddy stay` | 原地待命（等同关闭跟随） |
 | `/buddy listen [on\|off]` | 切换“直接接管聊天” / “仅 @ 触发” |
 | `/buddy sleep` | 找到附近的床并睡觉 |
 | `/buddy eat [食物]` | 让伙伴吃东西（主人命令即视为同意吃贵重食物） |
 | `/buddy persona [set <描述>\|reset]` | 设置 / 查看 / 清除伙伴的人格 |
 | `/buddy astrbot set <base-url> <api-key> [session-mode]` | 配置你自己的 AstrBot（写入个人配置） |
 | `/buddy astrbot say <内容>` | 向 AstrBot 提问并把回复发到聊天框 |
-| `/buddy global <reload\|ai\|astrbot\|debug>` | 修改全局配置（管理员） |
+| `/buddy global set <apikey> [model] [base-url]` | 配置服务器全局 DeepSeek Key（管理员） |
+| `/buddy global <reload\|ai\|astrbot\|debug>` | 修改其他全局配置（管理员） |
 | `/buddy ai set <default\|astrbot\|auto>` | 选择默认 AI 后端（默认 = DeepSeek） |
 | `/buddy ai` | 查看两个后端的可用情况与实际使用值 |
-| `/buddy stop` | 停止全部动作 |
+| `/buddy stop` | 停止全部动作，并关闭跟随（重新跟上：说「跟着我」或 `/buddy follow`） |
 | `/buddy status` | 查看位置/血量/背包/动作 |
 | `/buddy remove [名字]` | 移除伙伴 |
 | `/buddy list` | 查看自己的伙伴 |
@@ -350,6 +372,10 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 聊天栏也可以直接对话：**默认情况下，拥有伙伴的玩家说的每句话都会发给 AI**，不需要前缀。
 你的发言仍然会正常公开显示，只有伙伴的回复默认只发给你（`chat.speak-in-chat: true` 时才会广播）。
 如果不想被打断，使用 `/buddy listen off` 切回仅 `@` 触发。
+
+> 「跟着我」「过来」「停下」这三类短句由**插件直接执行**，不经过大模型，也不需要配置 AI：
+> 说「停下」等同于执行 `/buddy stop`（打断挖掘/战斗/砍树 + 关闭跟随）；说「跟着我」等同于 `/buddy follow`；
+> 说「过来」等同于 `/buddy come`。
 
 ### 权限
 
@@ -425,7 +451,7 @@ Tools.of("smelt_item", "把背包里的矿石放进熔炉烧炼", schema, (conte
 - **对话历史**：内存保存，服务器重启后清空；假人的等级、经验、血量、背包和装备则会自动保存与恢复。
 - **控制台日志**：`chat.log-to-console: true` 时，玩家与假人的对话、AstrBot 问答、AI 工具调用都会以 `[对话]` / `[AI工具]` / `[AstrBot]` 前缀打印到服务端控制台；API Key 不会打印。
 - **自动战斗**：靠近到 3 格停步、面向目标、每 12 tick 攻击一次；按 DPS（伤害×攻速，含锋利）选武器，耐久 <10% 换下一把；无武器则撤退；血量 <30% 撤退吃金苹果，30%~60% 边打边吃；被 4 只以上围攻时撤退；战斗结束后自动拾取掉落物。
-- **战斗禁忌**：苦力怕 ≤5 格先后退；坚守者潜行离开（不跑）；末影人、僵尸猪灵、狼、铁傀儡不主动攻击；避免站在方块边缘、水边、岩浆边战斗。
+- **战斗禁忌**：看到苦力怕（10 格内）就疾跑远开、绝不近战；坚守者潜行离开（不跑）；末影人、僵尸猪灵、狼、铁傀儡不主动攻击；避免站在方块边缘、水边、岩浆边战斗。
 
 ## 目录结构
 

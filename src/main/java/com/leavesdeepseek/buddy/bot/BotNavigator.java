@@ -45,6 +45,8 @@ public final class BotNavigator {
     private final Map<UUID, NavTask> tasks = new HashMap<>();
     /** 粘性跟随：只要没被 stopFollow 清掉，任何任务结束后都会自动恢复跟随 */
     private final Map<UUID, FollowState> follows = new HashMap<>();
+    /** 主人明确说过「别跟着我」：屏蔽自动来源的 follow，只有 forceFollow 才能重新开启 */
+    private final java.util.Set<UUID> followDisabled = new java.util.HashSet<>();
     /** 正在执行具体动作的假人：锁住期间不自动恢复跟随 */
     private final Map<UUID, Integer> locks = new HashMap<>();
 
@@ -74,6 +76,7 @@ public final class BotNavigator {
         }
         tasks.clear();
         follows.clear();
+        followDisabled.clear();
     }
 
     /**
@@ -108,9 +111,12 @@ public final class BotNavigator {
     }
 
     /**
-     * 高优先级跟随：主人说「跟着我」时使用，会中断当前的移动与挖掘。
+     * 高优先级跟随：主人说「跟着我」时使用，会中断当前的移动与挖掘，并清除「别跟着」状态。
      */
     public void forceFollow(Bot bot, Player target, double distance) {
+        if (bot != null) {
+            followDisabled.remove(bot.getUniqueId());
+        }
         follow(bot, target, distance, PRIORITY_HIGH);
     }
 
@@ -119,6 +125,10 @@ public final class BotNavigator {
             return;
         }
         UUID botId = bot.getUniqueId();
+        if (priority < PRIORITY_HIGH && followDisabled.contains(botId)) {
+            // 主人说过「别跟着我」，战斗/护主等自动来源不能再把跟随打开
+            return;
+        }
         FollowState previous = follows.get(botId);
         if (previous != null && previous.ownerId().equals(target.getUniqueId())) {
             // 不要把手动开启的高优先级跟随降级成普通跟随
@@ -158,19 +168,30 @@ public final class BotNavigator {
     }
 
     /**
-     * 彻底停止跟随（主人说「停下」/ stop_all_actions 时使用）。
+     * 彻底停止跟随（主人说「停下」/ stop_all_actions / /buddy stop 时使用）。
+     * <p>会记住「主人让我别跟着」，之后战斗结束、任务结束都不会自动恢复跟随；
+     * 只有 forceFollow（主人明确说「跟着我」或 /buddy follow）才会重新开启。</p>
      */
     public void stopFollow(Bot bot) {
         if (bot == null) {
             return;
         }
-        follows.remove(bot.getUniqueId());
-        NavTask task = tasks.get(bot.getUniqueId());
+        UUID botId = bot.getUniqueId();
+        followDisabled.add(botId);
+        follows.remove(botId);
+        NavTask task = tasks.get(botId);
         if (task != null && task.following()) {
-            tasks.remove(bot.getUniqueId());
+            tasks.remove(botId);
             task.cancelMovement();
             task.future.complete(false);
         }
+    }
+
+    /**
+     * 主人是否明确让假人「别跟着」。
+     */
+    public boolean isFollowDisabled(Bot bot) {
+        return bot != null && followDisabled.contains(bot.getUniqueId());
     }
 
     /**
@@ -361,6 +382,13 @@ public final class BotNavigator {
      * 这是「让假人一定跟着我」的兜底，任何工具调用打断跟随都能自动恢复。
      */
     private void resumePausedFollows() {
+        if (!followDisabled.isEmpty()) {
+            // 假人被移除后别把 UUID 一直留在内存里
+            followDisabled.removeIf(botId -> {
+                Bot bot = bots.byId(botId);
+                return bot == null || !bot.isValid();
+            });
+        }
         if (follows.isEmpty()) {
             return;
         }
@@ -826,6 +854,12 @@ public final class BotNavigator {
         private void cancelMovement() {
             bots.stopActions(bot, MoveAction.class);
             bots.stopActions(bot, JumpAction.class);
+            try {
+                // 导航结束后别一直保持着疾跑标记
+                bot.setSprinting(false);
+            } catch (RuntimeException ignored) {
+                // 假人可能已被移除
+            }
         }
     }
 
