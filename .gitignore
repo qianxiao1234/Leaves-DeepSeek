@@ -1,0 +1,10 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+.vscode/
+run/
+!run/.gitkeep
+*.log
+work.md

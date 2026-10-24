@@ -1,0 +1,26 @@
+name: LeavesDeepSeek
+version: '${version}'
+main: com.leavesdeepseek.buddy.LeavesDeepSeekPlugin
+api-version: '1.21'
+load: POSTWORLD
+description: 由 DeepSeek 驱动的 AI 伙伴假人，让假人听懂指令并像玩家一样行动。
+authors: [ Leaves-DeepSeek ]
+website: https://github.com/LeavesMC/Leaves
+
+commands:
+  buddy:
+    description: AI 伙伴管理命令
+    usage: /buddy help
+    aliases: [ buddyai, companion ]
+    permission: leavesdeepseek.use
+
+permissions:
+  leavesdeepseek.use:
+    description: 允许使用 AI 伙伴的基础功能（对话、跟随、任务）
+    default: true
+  leavesdeepseek.spawn:
+    description: 允许创建 / 移除 AI 伙伴假人
+    default: true
+  leavesdeepseek.admin:
+    description: 允许重载配置与查看调试信息
+    default: op

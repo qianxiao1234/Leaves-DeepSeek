@@ -1,0 +1,68 @@
+package com.leavesdeepseek.buddy.bot;
+
+import org.bukkit.entity.EntityType;
+
+import java.util.EnumSet;
+import java.util.Set;
+
+/**
+ * 战斗策略常量与生物分级。
+ */
+public final class ThreatRules {
+
+    /** 两次攻击之间的冷却（tick），12 tick = 0.6 秒 */
+    public static final int ATTACK_COOLDOWN_TICKS = 12;
+    /** 停止靠近的距离 */
+    public static final double ENGAGE_DISTANCE = 3.0;
+    /** 血量低于该比例时撤退吃金苹果 */
+    public static final double HEALTH_RETREAT_RATIO = 0.30;
+    /** 血量低于该比例时边打边吃 */
+    public static final double HEALTH_EAT_RATIO = 0.60;
+    /** 战斗前饥饿值低于该值先吃 */
+    public static final int HUNGER_EAT_LEVEL = 6;
+    /** 被这么多只敌对生物围攻时撤退 */
+    public static final int GROUP_RETREAT_COUNT = 4;
+    /** 统计围攻数量的半径 */
+    public static final double GROUP_RADIUS = 8.0;
+    /** 苦力怕危险距离：进入后立刻后退 */
+    public static final double CREEPER_DANGER_DISTANCE = 5.0;
+    /** 苦力怕后退到的安全距离 */
+    public static final double CREEPER_SAFE_DISTANCE = 6.5;
+
+    /** 不主动攻击（会引发群体仇恨 / 中立生物） */
+    private static final Set<EntityType> PASSIVE = EnumSet.of(
+            EntityType.ENDERMAN,
+            EntityType.ZOMBIFIED_PIGLIN,
+            EntityType.WOLF,
+            EntityType.IRON_GOLEM,
+            EntityType.PIGLIN);
+
+    /** 坚守者：不交战，潜行离开 */
+    public static final Set<EntityType> SNEAK_AVOID = EnumSet.of(EntityType.WARDEN);
+
+    private ThreatRules() {
+    }
+
+    public static boolean isPassive(EntityType type) {
+        return type != null && PASSIVE.contains(type);
+    }
+
+    public static boolean isSneakAvoid(EntityType type) {
+        return type != null && SNEAK_AVOID.contains(type);
+    }
+
+    public static boolean isCreeper(EntityType type) {
+        return type == EntityType.CREEPER;
+    }
+
+    /**
+     * 远程生物：必须拉近距离（目前策略与近战一致，集中在这里方便以后扩展）。
+     */
+    public static boolean isRanged(EntityType type) {
+        return type == EntityType.SKELETON
+                || type == EntityType.STRAY
+                || type == EntityType.BOGGED
+                || type == EntityType.PILLAGER
+                || type == EntityType.WITCH;
+    }
+}

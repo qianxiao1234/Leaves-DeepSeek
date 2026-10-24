@@ -1,0 +1,205 @@
+# ============================================================
+#  LeavesDeepSeek - DeepSeek 驱动的 AI 伙伴假人
+#  配置修改后执行 /buddy reload 生效
+# ============================================================
+
+# 配置版本（插件据此自动迁移旧配置，请勿手动删除）
+config-version: 4
+
+deepseek:
+  # 服务器全局 API Key。留空表示不提供全局 Key（默认留空，由服主决定是否开放）
+  # 留空时也可用环境变量 DEEPSEEK_API_KEY
+  api-key: ""
+  base-url: "https://api.deepseek.com"
+  # deepseek-chat 支持 Function Calling；deepseek-reasoner 不支持工具调用
+  model: "deepseek-chat"
+  temperature: 0.6
+  max-tokens: 1024
+  # 单次 HTTP 请求超时（秒）
+  timeout-seconds: 60
+  # 单次工具执行的最长等待时间（秒）
+  tool-timeout-seconds: 90
+  # 一次对话中最多连续调用多少轮工具
+  max-tool-rounds: 8
+  # 每个假人保留的历史消息条数（user + assistant 各算一条）
+  history-limit: 20
+  # 玩家没有自己的 Key 时，是否允许使用上面的全局 Key（默认开）
+  # 全局 Key 默认是空的，所以开启不会产生费用；只有服主真的填了 Key，
+  # 并且希望所有玩家共用时才有意义
+  use-global-config: true
+  # 追加到系统提示词末尾，可用于设定伙伴性格，例如“说话活泼一点，偶尔开玩笑”
+  extra-system-prompt: ""
+
+ai:
+  # 默认 AI 后端。玩家可用 /buddy ai set <default|astrbot|auto> 覆盖
+  # auto      = 自动：只配了 DeepSeek 就用 DeepSeek，只配了 AstrBot 就用 AstrBot，
+  #             两个都配好时要求玩家用 /buddy ai set 明确选择
+  # deepseek  = 强制使用 DeepSeek（能操作假人）
+  # astrbot   = 强制使用已接入的 AstrBot（纯对话）
+  backend: auto
+
+companion:
+  # 默认假人名前缀，最终名字最长 16 个字符
+  name-prefix: "AI_"
+  # 创建假人时使用的默认皮肤名（正版玩家名），留空则使用假人名
+  default-skin: ""
+  # 每个玩家最多拥有多少个伙伴假人
+  max-per-player: 1
+  # 创建后自动跟随主人
+  auto-follow: true
+  # 跟随距离（格），小于该距离时停下
+  follow-distance: 3.0
+  # 主人退出游戏时是否移除假人
+  remove-on-quit: false
+  # 移除假人时是否保存假人数据（下次 /bot load 可恢复）
+  save-on-remove: true
+  # 插件卸载 / 服务器关闭时是否移除假人
+  remove-on-disable: false
+  # 启动时自动把 companions.yml 中记录的假人重新绑定到主人
+  auto-bind-existing: true
+  # 假人不参与睡眠计数（不会因为假人不睡导致夜晚无法跳过）
+  skip-sleep-check: true
+
+chat:
+  # 是否允许玩家在聊天栏直接和伙伴对话
+  enabled: true
+  # true: 拥有伙伴的玩家说的每句话都会发给 AI（无需前缀）
+  # false: 只有以 trigger 开头或以假人名开头时才触发
+  always-listen: true
+  trigger: "@"
+  # 是否让假人把回复广播到服务器聊天栏（false 则只回复主人）
+  speak-in-chat: false
+  # 同一玩家两次对话的最小间隔（秒）
+  cooldown-seconds: 2
+  # 把玩家与假人的对话内容同时打印到服务端控制台，方便调试（密钥不会打印）
+  log-to-console: true
+  # 玩家可以用 /buddy listen off 临时关闭直听，改为仅 @ 触发
+
+safety:
+  # 假人允许离开主人的最大距离（格），跟随状态下不受限制
+  operate-radius: 48
+  allow-break-blocks: true
+  allow-place-blocks: true
+  allow-attack: true
+  # 是否允许 AI 自己创建/移除假人
+  allow-create-bot: false
+  # 只砍「自然生长的树」：树干最底部必须踩在泥土/草方块等自然地面上，
+  # 且树干顶部周围要有树叶。村民房子、玩家建筑的木柱子会被拒绝
+  require-leaves-for-logs: true
+  # 判断「树顶有没有树叶」时的搜索半径（格），内部限制在 2~3
+  log-leaf-radius: 3
+  # 禁止破坏的方块
+  blocked-materials:
+    - BEDROCK
+    - BARRIER
+    - END_PORTAL_FRAME
+    - COMMAND_BLOCK
+    - CHAIN_COMMAND_BLOCK
+    - REPEATING_COMMAND_BLOCK
+    - STRUCTURE_BLOCK
+    - JIGSAW
+    - SPAWNER
+
+navigator:
+  # A* 寻路最多展开的节点数，越大越聪明也越吃性能
+  max-nodes: 3000
+  # 单次寻路的最大半径（格）
+  max-range: 64
+  # 目标移动超过该距离时重新寻路
+  repath-distance: 3.0
+  # 卡住时是否允许直接传送（作弊式兜底，默认关闭）
+  teleport-fallback: false
+
+crafting:
+  # 是否允许假人合成物品
+  enabled: true
+  # 3x3 配方是否需要附近有工作台（2x2 配方始终允许）
+  require-workbench: true
+  # 工作台的搜索半径（格）
+  workbench-radius: 4
+
+idle:
+  # 空闲时小范围随机走动
+  enabled: true
+  # 每隔多少秒判定一次（避免频繁计算）
+  check-interval-seconds: 8
+  # 每次判定的触发概率（0~1）
+  chance: 0.35
+  # 随机走动的最大半径（格）
+  radius: 2.0
+  # 单次走动的最长时间（秒）
+  timeout-seconds: 4
+
+mining:
+  # 挖完方块后自动走近捡起掉落物
+  auto-pickup: true
+  # 自动拾取的搜索半径（格）
+  pickup-radius: 5
+
+combat:
+  # 自动攻击附近的敌对生物
+  auto-defense: true
+  # 自动索敌半径（格）
+  defense-radius: 10
+  # 主人被敌对生物攻击时主动保护（需假人在主人该半径内）
+  defend-owner: true
+  # 假人离主人多少格以内会主动护主
+  defend-owner-radius: 50
+  # 检测间隔（tick），20 = 1 秒
+  check-interval-ticks: 20
+  # 额外不主动交战的生物（苦力怕/坚守者/末影人/中立生物已在代码里按类型处理）
+  avoid-mobs: []
+  # 发现上面这些生物时，多少格内开始撤退
+  avoid-radius: 12
+
+survival:
+  # 饥饿时自动吃背包里的普通食物（不会自动吃金苹果等贵重食物）
+  auto-eat: true
+  # 饥饿值低于多少时自动进食
+  eat-threshold: 14
+  # 检测间隔（秒）
+  check-interval-seconds: 5
+
+persistence:
+  # 定期把假人的名字、位置、血量、饥饿、经验、背包与装备保存到玩家目录
+  enabled: true
+  # 保存间隔（秒）
+  interval-seconds: 30
+  # 服务器启动时自动恢复上次保存的假人
+  restore-on-start: true
+
+astrbot:
+  # 是否启用 AstrBot OpenAPI 对接（POST /api/v1/chat + SSE）
+  enabled: false
+  # AstrBot WebUI / API 地址，同机可用 http://127.0.0.1:6185
+  base-url: "http://127.0.0.1:6185"
+  # 在 AstrBot WebUI → 设置 → OpenAPI 创建 API Key（scope 需包含 chat）
+  # 也可以用 /buddy astrbot set <base-url> <api-key> [session-mode] 填写，不会写进日志
+  key: ""
+  # 会话模式：per-player（每个玩家独立记忆）/ fixed（所有人共用一个会话）/ per-message（每次独立）
+  session-mode: per-player
+  # fixed 模式使用的会话 ID
+  fixed-session: mc-server-main
+  # 连接超时 10 秒；读取超时由下面配置（秒）
+  timeout-seconds: 120
+  # 回复最大字符数，避免刷屏
+  max-reply-chars: 512
+
+# 输出请求与工具调用日志到控制台，排查问题时打开
+debug: false
+
+# 插件自有日志：写到 plugins/LeavesDeepSeek/logs/2026-10-24_17-08.log
+# （文件名 = 本次启动的日期_时分，一次启动一个文件；同分钟内重复 reload 会加 -2/-3）
+# 与控制台日志相互独立，控制台被刷屏时也能从这里查完整链路
+logging:
+  # 总开关。关闭后不产生任何日志文件
+  enabled: true
+  # 是否把 DeepSeek / AstrBot 的完整请求体与响应体写进日志
+  # 打开后日志里会有你的对话原文与 AI 回复（API Key 会自动打码）
+  capture-payload: true
+  # 单条请求/响应体最多记录多少字符，超出截断
+  max-body-chars: 4000
+  # 日志保留天数，超期文件在插件启用时自动删除
+  retain-days: 7
+  # 单个日志文件的大小上限（MB），超过后自动切成 …-2.log
+  max-file-mb: 8
