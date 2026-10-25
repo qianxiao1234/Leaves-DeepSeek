@@ -19,6 +19,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -39,6 +41,8 @@ public final class BodyManager {
     private int saveCounter;
     /** 广播去重（同一具躯壳 1.5 秒内只播一次）。 */
     private final Map<String, Long> lastAnnounce = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 已经「存过档并清空背包」的实体（防止二次调用把空背包写回存档）。 */
+    private final Set<UUID> clearedInventories = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public BodyManager(LeavesDeepSeekPlugin plugin, AgentConfig config) {
         this.plugin = plugin;
@@ -272,6 +276,12 @@ public final class BodyManager {
 
     private Bot spawnEntity(String name, Location location) {
         try {
+            // 同名实体已存在（/reload 时 Leaves 可能没删）→ 直接复用，绝不生成第二具
+            Bot existing = plugin.bots().manager().getBot(name);
+            if (existing != null && existing.isValid()) {
+                plugin.log().info("躯壳", "躯壳 " + name + " 的实体已存在，直接复用（不重复生成）");
+                return existing;
+            }
             BotCreator creator = Bukkit.getBotManager().botCreator(name, location)
                     .creator(Bukkit.getConsoleSender());
             Bot bot = creator.spawn();
@@ -383,6 +393,25 @@ public final class BodyManager {
             body.guard().resume(reason);
             return body;
         }
+        // /reload 之后旧实体可能还在世界里（Leaves 不一定移除）：直接接管，别再生成一具
+        // （否则会出现「旧实体 + 新实体」两套装备）
+        Bot existing = plugin.bots().manager().getBot(body.name());
+        if (existing != null && existing.isValid()) {
+            body.bot(existing);
+            clearedInventories.remove(existing.getUniqueId());
+            if (inventoryEmpty(existing)) {
+                YamlConfiguration saved = store.read(body.name());
+                if (saved != null) {
+                    store.apply(existing, saved);
+                    plugin.log().info("躯壳", "接管已存在的躯壳 " + body.name() + "，并按存档恢复物品");
+                }
+            } else {
+                plugin.log().info("躯壳", "接管已存在的躯壳 " + body.name() + "（背包保持现状，不重复发放）");
+            }
+            body.state(AIBody.State.PAUSED);
+            body.guard().resume(reason);
+            return body;
+        }
         YamlConfiguration yaml = store.read(body.name());
         Location location = resolveLocation(yaml);
         Bot bot = spawnEntity(body.name(), location);
@@ -390,12 +419,27 @@ public final class BodyManager {
             throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "无法重新生成躯壳实体");
         }
         body.bot(bot);
+        clearedInventories.remove(bot.getUniqueId());
         if (yaml != null) {
             store.apply(bot, yaml);
         }
         body.state(AIBody.State.PAUSED);
         body.guard().resume(reason);
         return body;
+    }
+
+    /** 背包（含盔甲/副手）是不是全空。 */
+    private static boolean inventoryEmpty(Bot bot) {
+        try {
+            for (ItemStack stack : bot.getInventory().getContents()) {
+                if (stack != null && !stack.getType().isAir()) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (RuntimeException exception) {
+            return false;
+        }
     }
 
     private Location resolveLocation(YamlConfiguration yaml) {
@@ -416,6 +460,36 @@ public final class BodyManager {
             return false;
         }
         return store.save(name, body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey(), body.dead());
+    }
+
+    /**
+     * 实体被移除前的保存点：**先存档，再清空背包**，避免 Leaves 移除假人时的 {@code dropAll(true)}
+     * 把装备撒在地上、下次启动又从存档恢复一份（凭空多一套）。
+     *
+     * <p>与传统假人的 {@code BotStateService.saveAndClear()} 同一套思路：
+     * 存档写失败就不清背包 —— 宁可掉在地上，也不能让东西凭空消失。</p>
+     *
+     * @return true 表示已保存并清空（或此前已经处理过）
+     */
+    public boolean saveAndClear(Bot bot) {
+        AIBody body = byBot(bot);
+        if (body == null || bot == null || !bot.isValid()) {
+            return false;
+        }
+        if (!clearedInventories.add(bot.getUniqueId())) {
+            // 已经存过并清过：绝不能再用「空背包」覆盖存档
+            return true;
+        }
+        boolean saved = store.save(body.name(), bot, body.anchor(), body.createdAt(),
+                System.currentTimeMillis(), body.ownerKey(), body.dead());
+        if (!saved) {
+            clearedInventories.remove(bot.getUniqueId());
+            plugin.log().warn("躯壳", "存档失败，为防丢东西不清空背包：" + body.name());
+            return false;
+        }
+        clearInventory(bot);
+        plugin.log().info("躯壳", "已存档并清空躯壳 " + body.name() + " 的背包（移除时不会掉落）");
+        return true;
     }
 
     private void clearInventory(Bot bot) {
@@ -671,7 +745,12 @@ public final class BodyManager {
         for (AIBody body : bodies()) {
             body.controller().stopAll("SHUTDOWN");
             if (body.online()) {
-                store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey(), body.dead());
+                // 关服/重载前必须「先存档再清空背包」：Leaves 移除假人时会 dropAll，
+                // 不清空就会把装备丢在地上，下次启动又从存档恢复一份（凭空多一套）。
+                if (!saveAndClear(body.bot())) {
+                    store.save(body.name(), body.bot(), body.anchor(), body.createdAt(),
+                            body.lastSeen(), body.ownerKey(), body.dead());
+                }
             }
         }
         AgentServer current = server;

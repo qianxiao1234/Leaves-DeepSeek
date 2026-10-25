@@ -174,7 +174,10 @@ public final class BotListener implements Listener {
     public void onBotRemove(BotRemoveEvent event) {
         Bot bot = event.getBot();
         if (bot != null && plugin.bodyManager() != null && plugin.bodyManager().isBody(bot)) {
-            // AI 躯壳的存档由 BodyManager 负责，别在这里清背包/删档
+            // AI 躯壳：和传统假人一样「先存档再清空背包」。
+            // Leaves 移除假人时会 dropAll(true)，不清空就会把装备撒在地上，
+            // 下次启动又从 bodies/<name>/state.yml 恢复一份 → 凭空多一套。
+            plugin.bodyManager().saveAndClear(bot);
             return;
         }
         // 这里绝不删除存档：

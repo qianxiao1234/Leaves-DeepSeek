@@ -627,6 +627,8 @@ plugins/LeavesDeepSeek/bodies/
   并且不能操作别的躯壳、也不能再 `body.create`。
 > 躯壳**死亡不会掉东西**：和传统假人一样「倒地」——保留全部物品、无敌、停掉所有任务，
 > `body.respawn`（或 `/ai body revive`）救起来；`agent.auto-respawn: true` 可自动复活。
+> **关服 / `/reload` 也不会掉装备**：移除实体前会先存档再清空背包（`saveAndClear`），下次启动从
+> `bodies/<名字>/state.yml` 恢复，不会出现「地上掉一套 + 存档里又一套」。
 > 倒地/站起来时默认**全服广播**一句（`agent.announce-death` / `announce-respawn`）。
 > 倒地期间所有 `act.*` 会返回 `-32015 reason=downed`，先 `body.respawn` 再干活。
 - `agent.auto-load: false` 时只登记成 `offline`（`body.list` 里能看到），等 AI `attach` 再生成实体。
