@@ -39,6 +39,19 @@ public final class AgentConfig {
     private int respawnDelaySeconds;
     private boolean audit = true;
 
+    /** AI 能不能通过 RPC 造躯壳（false 时只有 /ai body create 可用）。 */
+    private boolean allowCreate = true;
+    /** AI 能不能通过 RPC 删躯壳（默认 false：只能删自己造的，见 BodyStore 的 owner）。 */
+    private boolean allowDelete;
+    /** create 不指定世界时用哪个世界（空 = 主世界）。 */
+    private String createDefaultWorld = "";
+    /** create 时把出生点抬高的格数（防卡在方块里）。 */
+    private int createDefaultYOffset;
+    /** 自定义躯壳名规则（空 = 用内置 3~16 位字母数字下划线）。 */
+    private String bodyNameRegex = "";
+    /** 造/删躯壳是否写审计。 */
+    private boolean auditCreate = true;
+
     private int motionHz = 5;
     private int terrainHz = 2;
     private int companionHz = 1;
@@ -83,6 +96,13 @@ public final class AgentConfig {
         respawnDelaySeconds = clamp(config.getInt("agent.respawn-delay-seconds", 0), 0, 300);
         audit = config.getBoolean("agent.audit", true);
 
+        allowCreate = config.getBoolean("agent.allow-create", true);
+        allowDelete = config.getBoolean("agent.allow-delete", false);
+        createDefaultWorld = trim(config.getString("agent.create-default-world", ""));
+        createDefaultYOffset = clamp(config.getInt("agent.create-default-y-offset", 0), 0, 64);
+        bodyNameRegex = trim(config.getString("agent.body-name-regex", ""));
+        auditCreate = config.getBoolean("agent.audit-create", true);
+
         motionHz = clamp(config.getInt("agent.sense.motion-hz", 5), 1, 20);
         terrainHz = clamp(config.getInt("agent.sense.terrain-hz", 2), 1, 20);
         companionHz = clamp(config.getInt("agent.sense.companion-hz", 1), 1, 20);
@@ -122,8 +142,7 @@ public final class AgentConfig {
         return tokenDefault;
     }
 
-    private static String normalizeBind(String raw) {
-        String value = raw == null ? "" : raw.trim();
+    private static String normalizeBind(String raw) {        String value = raw == null ? "" : raw.trim();
         if (value.isEmpty()) {
             return "127.0.0.1";
         }
@@ -149,6 +168,10 @@ public final class AgentConfig {
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private static String trim(String raw) {
+        return raw == null ? "" : raw.trim();
     }
 
     private static double clamp(double value, double min, double max) {
@@ -217,6 +240,30 @@ public final class AgentConfig {
 
     public boolean audit() {
         return audit;
+    }
+
+    public boolean allowCreate() {
+        return allowCreate;
+    }
+
+    public boolean allowDelete() {
+        return allowDelete;
+    }
+
+    public String createDefaultWorld() {
+        return createDefaultWorld;
+    }
+
+    public int createDefaultYOffset() {
+        return createDefaultYOffset;
+    }
+
+    public String bodyNameRegex() {
+        return bodyNameRegex;
+    }
+
+    public boolean auditCreate() {
+        return auditCreate;
     }
 
     public int motionHz() {

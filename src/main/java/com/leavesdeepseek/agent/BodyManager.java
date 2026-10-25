@@ -43,6 +43,12 @@ public final class BodyManager {
         this.config = config;
         this.store = new BodyStore(plugin);
         this.audit = new AuditLog(plugin);
+        applyNameRegex(config.bodyNameRegex());
+    }
+
+    /** 配置重载后同步名字正则。 */
+    public void applyConfig() {
+        applyNameRegex(config.bodyNameRegex());
     }
 
     public LeavesDeepSeekPlugin plugin() {
@@ -106,49 +112,91 @@ public final class BodyManager {
     // ------------------------------------------------------------------ 生命周期
 
     /**
-     * 造一具躯壳。
+     * 造一具躯壳（命令行用，不带归属）。
      */
     public AIBody create(String name, Location location) {
+        return create(name, location, "");
+    }
+
+    /**
+     * 造一具躯壳。
+     *
+     * @param ownerKey 归属指纹（RPC 造的时候传；命令行传空串 = 无归属，只能 OP 删）
+     */
+    public AIBody create(String name, Location location, String ownerKey) {
         String clean = name == null ? "" : name.trim();
-        if (!NAME.matcher(clean).matches()) {
+        if (!validName(clean)) {
             throw new JsonRpc.RpcException(JsonRpc.BAD_REQUEST,
-                    "名字必须是 3~16 个字母/数字/下划线");
+                    "名字必须是 3~16 个字母/数字/下划线",
+                    JsonRpc.object("reason", "bad_name", "name", clean));
         }
         if (bodies.containsKey(clean) || plugin.bots().byName(clean) != null
                 || Bukkit.getPlayerExact(clean) != null) {
-            throw new JsonRpc.RpcException(JsonRpc.BAD_REQUEST, "名字已被占用：" + clean);
+            throw new JsonRpc.RpcException(JsonRpc.BAD_REQUEST, "名字已被占用：" + clean,
+                    JsonRpc.object("reason", "name_taken", "name", clean));
         }
         if (bodies.size() >= config.maxBodies()) {
-            throw new JsonRpc.RpcException(JsonRpc.BUSY, "躯壳数量已达上限 " + config.maxBodies());
+            throw new JsonRpc.RpcException(JsonRpc.BUSY, "躯壳数量已达上限 " + config.maxBodies(),
+                    JsonRpc.object("reason", "too_many_bodies", "max", config.maxBodies()));
         }
-        Location spawn = location;
-        if (spawn == null || spawn.getWorld() == null) {
-            World world = Bukkit.getWorlds().isEmpty() ? null : Bukkit.getWorlds().get(0);
-            if (world == null) {
-                throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "没有可用世界");
-            }
-            spawn = world.getSpawnLocation();
-        }
+        Location spawn = resolveSpawn(location);
         Bot bot = spawnEntity(clean, spawn);
         if (bot == null) {
-            throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "服务端创建假人失败（检查 fakeplayer 配置）");
+            throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "服务端创建假人失败（检查 fakeplayer 配置）",
+                    JsonRpc.object("reason", "spawn_failed"));
         }
         AIBody body = new AIBody(this, clean, bot.getUniqueId(), System.currentTimeMillis());
         body.bot(bot);
+        body.ownerKey(ownerKey);
         body.state(AIBody.State.PAUSED);
         bodies.put(clean, body);
         if (store.exists(clean)) {
             YamlConfiguration yaml = store.read(clean);
             store.apply(bot, yaml);
+            String stored = store.ownerOf(clean);
+            if (!stored.isBlank()) {
+                body.ownerKey(stored);
+            }
         }
-        store.save(clean, bot, body.anchor(), body.createdAt(), System.currentTimeMillis());
-        auditEvent(clean, "body.create", JsonRpc.object("pos", com.leavesdeepseek.agent.util.VecUtil
-                .toArray(bot.getLocation())));
+        store.save(clean, bot, body.anchor(), body.createdAt(), System.currentTimeMillis(),
+                body.ownerKey());
+        if (config.auditCreate()) {
+            auditEvent(clean, "body.create", JsonRpc.object(
+                    "pos", com.leavesdeepseek.agent.util.VecUtil.toArray(bot.getLocation()),
+                    "owner", body.ownerKey(),
+                    "source", ownerKey.isBlank() ? "command" : "rpc"));
+        }
         plugin.log().info("躯壳", "已创建躯壳 " + clean + " @ " + bot.getWorld().getName()
                 + " " + Math.round(bot.getLocation().getX()) + " "
                 + Math.round(bot.getLocation().getY()) + " "
-                + Math.round(bot.getLocation().getZ()));
+                + Math.round(bot.getLocation().getZ())
+                + (ownerKey.isBlank() ? "" : " | owner=" + ownerKey));
         return body;
+    }
+
+    /** create 的落点：显式坐标 > create-default-world 的重生点 > 主世界重生点，并抬高 y-offset。 */
+    private Location resolveSpawn(Location location) {
+        Location spawn = location;
+        if (spawn == null || spawn.getWorld() == null) {
+            World world = null;
+            String configured = config.createDefaultWorld();
+            if (!configured.isBlank()) {
+                world = Bukkit.getWorld(configured);
+            }
+            if (world == null) {
+                world = Bukkit.getWorlds().isEmpty() ? null : Bukkit.getWorlds().get(0);
+            }
+            if (world == null) {
+                throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "没有可用世界",
+                        JsonRpc.object("reason", "no_world"));
+            }
+            spawn = world.getSpawnLocation();
+        }
+        int offset = config.createDefaultYOffset();
+        if (offset > 0) {
+            spawn = spawn.clone().add(0, offset, 0);
+        }
+        return spawn;
     }
 
     private Bot spawnEntity(String name, Location location) {
@@ -171,9 +219,21 @@ public final class BodyManager {
     }
 
     public boolean remove(String name, boolean save) {
+        return remove(name, save, null);
+    }
+
+    /**
+     * 删除躯壳。
+     *
+     * @param requesterKey 请求者指纹（null = 命令行/OP，跳过归属校验）
+     */
+    public boolean remove(String name, boolean save, String requesterKey) {
         AIBody body = bodies.get(name);
         if (body == null) {
             return false;
+        }
+        if (requesterKey != null) {
+            checkDeletable(body, requesterKey);
         }
         body.controller().stopAll("REMOVED");
         if (body.session() != null) {
@@ -183,7 +243,7 @@ public final class BodyManager {
         Bot bot = body.bot();
         if (bot != null && bot.isValid()) {
             if (save) {
-                store.save(name, bot, body.anchor(), body.createdAt(), System.currentTimeMillis());
+                store.save(name, bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey());
             }
             clearInventory(bot);
             bot.remove(false);
@@ -194,9 +254,35 @@ public final class BodyManager {
         if (!save) {
             store.delete(name);
         }
-        auditEvent(name, "body.remove", JsonRpc.object("save", save));
+        auditEvent(name, "body.remove", JsonRpc.object("save", save,
+                "source", requesterKey == null ? "command" : "rpc",
+                "owner", body.ownerKey()));
         plugin.log().info("躯壳", "已移除躯壳 " + name + (save ? "（已存档）" : "（未存档）"));
         return true;
+    }
+
+    /**
+     * 归属校验（验收 07/08/11）：
+     * <ul>
+     *   <li>{@code agent.allow-delete: false}（默认）→ 一律拒绝 {@code delete_disabled}；</li>
+     *   <li>没有 owner 字段的老躯壳 → 拒绝 {@code legacy_body}；</li>
+     *   <li>指纹不一致 → 拒绝 {@code not_owner}。</li>
+     * </ul>
+     */
+    private void checkDeletable(AIBody body, String requesterKey) {
+        if (!config.allowDelete()) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED, "服务器禁止 AI 删除躯壳（agent.allow-delete: false）",
+                    JsonRpc.object("reason", "delete_disabled", "body", body.name()));
+        }
+        String owner = body.ownerKey();
+        if (owner == null || owner.isBlank()) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED, "这是老躯壳（没有归属记录），只能由管理员用 /ai body remove 删除",
+                    JsonRpc.object("reason", "legacy_body", "body", body.name()));
+        }
+        if (!owner.equals(requesterKey)) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED, "这不是你造的躯壳",
+                    JsonRpc.object("reason", "not_owner", "body", body.name()));
+        }
     }
 
     /** 下线：存档 + 实体移出世界。 */
@@ -204,7 +290,7 @@ public final class BodyManager {
         Bot bot = body.bot();
         body.controller().stopAll(JsonRpc.nameOf(JsonRpc.BODY_OFFLINE));
         if (bot != null && bot.isValid()) {
-            store.save(body.name(), bot, body.anchor(), body.createdAt(), System.currentTimeMillis());
+            store.save(body.name(), bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey());
             clearInventory(bot);
             bot.remove(false);
         }
@@ -252,7 +338,7 @@ public final class BodyManager {
         if (body == null || !body.online()) {
             return false;
         }
-        return store.save(name, body.bot(), body.anchor(), body.createdAt(), body.lastSeen());
+        return store.save(name, body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey());
     }
 
     private void clearInventory(Bot bot) {
@@ -295,7 +381,7 @@ public final class BodyManager {
             saveCounter = 0;
             for (AIBody body : bodies()) {
                 if (body.online()) {
-                    store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen());
+                    store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey());
                 }
             }
         }
@@ -340,11 +426,38 @@ public final class BodyManager {
         return new ArrayList<>(bodies.keySet());
     }
 
+    /**
+     * {@code body.list}：列出全部躯壳（不需要 attach）。
+     *
+     * @param requesterKey 请求者指纹，用来填 {@code mine}
+     */
+    public com.google.gson.JsonArray list(String requesterKey) {
+        com.google.gson.JsonArray array = new com.google.gson.JsonArray();
+        for (AIBody body : bodies()) {
+            com.google.gson.JsonObject entry = new com.google.gson.JsonObject();
+            entry.addProperty("name", body.name());
+            entry.addProperty("state", body.state().name().toLowerCase(Locale.ROOT));
+            entry.addProperty("online", body.online());
+            entry.addProperty("attached", body.session() != null);
+            Location location = body.location();
+            if (location != null) {
+                entry.add("pos", com.leavesdeepseek.agent.util.VecUtil.toArray(location));
+                entry.addProperty("health", Math.round(body.bot().getHealth() * 10) / 10.0);
+                entry.addProperty("food", body.bot().getFoodLevel());
+            }
+            String owner = body.ownerKey();
+            entry.addProperty("owner", owner == null || owner.isBlank() ? "" : owner);
+            entry.addProperty("mine", requesterKey != null && !owner.isBlank() && owner.equals(requesterKey));
+            array.add(entry);
+        }
+        return array;
+    }
+
     public void shutdown() {
         for (AIBody body : bodies()) {
             body.controller().stopAll("SHUTDOWN");
             if (body.online()) {
-                store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen());
+                store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey());
             }
         }
         AgentServer current = server;
@@ -380,7 +493,44 @@ public final class BodyManager {
     }
 
     public static boolean validName(String name) {
-        return name != null && NAME.matcher(name).matches();
+        if (name == null) {
+            return false;
+        }
+        String custom = configRegex;
+        if (custom != null && !custom.isBlank()) {
+            try {
+                return java.util.regex.Pattern.compile(custom).matcher(name).matches();
+            } catch (java.util.regex.PatternSyntaxException exception) {
+                // 配错了就退回内置规则
+                return NAME.matcher(name).matches();
+            }
+        }
+        return NAME.matcher(name).matches();
+    }
+
+    /** 由 AgentConfig 在 reload 时写入的自定义名字正则（静态是为了让 validName 能被静态调用）。 */
+    private static volatile String configRegex = "";
+
+    public static void applyNameRegex(String regex) {
+        configRegex = regex == null ? "" : regex.trim();
+    }
+
+    /** token 的指纹（sha256 前 16 位，不存明文）。 */
+    public static String fingerprintOf(String token) {
+        if (token == null || token.isBlank()) {
+            return "";
+        }
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder(16);
+            for (int i = 0; i < 8; i++) {
+                builder.append(String.format("%02x", hash[i]));
+            }
+            return builder.toString();
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            return Integer.toHexString(token.hashCode());
+        }
     }
 
     /** 供 Player 检查（命令里用）。 */

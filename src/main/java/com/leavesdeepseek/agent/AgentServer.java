@@ -210,6 +210,7 @@ public final class AgentServer extends WebSocketServer {
             return;
         }
         session.authenticated(true);
+        session.fingerprint(BodyManager.fingerprintOf(token));
         JsonObject result = new JsonObject();
         result.addProperty("ok", true);
         result.addProperty("server", "LeavesDeepSeek");
@@ -220,6 +221,19 @@ public final class AgentServer extends WebSocketServer {
     // ------------------------------------------------------------------ 分发
 
     private JsonElement dispatch(AgentSession session, String method, JsonObject params) {
+        // 这三条必须放在 attached() 之前：客户端还没 attach 时也要能调（施工清单 §2.1）
+        switch (method) {
+            case "body.help":
+                return help();
+            case "body.list":
+                return manager.list(session.fingerprint());
+            case "body.create":
+                return createBody(session, params);
+            case "body.delete":
+                return deleteBody(session, params);
+            default:
+                break;
+        }
         AIBody body = attached(session);
         switch (method) {
             case "body.attach":
@@ -232,8 +246,6 @@ public final class AgentServer extends WebSocketServer {
                     body.guard().pause("detach");
                 }
                 return JsonRpc.object("ok", true, "state", "paused");
-            case "body.help":
-                return help();
             case "body.info":
                 return requireBody(body).sensors().snapshot();
             case "body.spawn", "body.load":
@@ -312,12 +324,92 @@ public final class AgentServer extends WebSocketServer {
         return result;
     }
 
+    /** {@code body.create}：AI 自己造躯壳（施工清单 §2.1）。 */
+    private JsonElement createBody(AgentSession session, JsonObject params) {
+        if (!config.allowCreate()) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED,
+                    "服务器禁止 AI 造躯壳（agent.allow-create: false）",
+                    JsonRpc.object("reason", "create_disabled"));
+        }
+        String name = Json.getString(params, "name", "");
+        Location location = null;
+        boolean hasCoords = params.has("x") || params.has("y") || params.has("z");
+        World world = null;
+        if (params.has("world") && !params.get("world").getAsString().isBlank()) {
+            world = Bukkit.getWorld(params.get("world").getAsString());
+            if (world == null) {
+                throw new JsonRpc.RpcException(JsonRpc.NOT_FOUND,
+                        "世界不存在：" + params.get("world").getAsString(),
+                        JsonRpc.object("reason", "no_such_world"));
+            }
+        }
+        if (hasCoords) {
+            if (world == null) {
+                world = Bukkit.getWorlds().isEmpty() ? null : Bukkit.getWorlds().get(0);
+            }
+            if (world == null) {
+                throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "没有可用世界",
+                        JsonRpc.object("reason", "no_world"));
+            }
+            location = new Location(world,
+                    Json.getDouble(params, "x", 0),
+                    Json.getDouble(params, "y", 64),
+                    Json.getDouble(params, "z", 0));
+        } else if (world != null) {
+            location = world.getSpawnLocation();
+        }
+        AIBody body = manager.create(name, location, session.fingerprint());
+        boolean autoAttach = Json.getBoolean(params, "autoAttach", true);
+        if (autoAttach) {
+            if (!session.canAttach(config.maxBodiesPerSession())
+                    && !session.bodies().contains(body.name())) {
+                // 造成功了但本会话已挂满：不进 attach，客户端可以换连接再 attach
+                autoAttach = false;
+            }
+        }
+        if (autoAttach) {
+            body.session(session);
+            session.bodies().add(body.name());
+            body.touch();
+            body.sensors().resetBaselines();
+            body.sensors().pushFullInventory();
+            body.sensors().tick();
+            body.guard().resume("create");
+        }
+        JsonObject result = new JsonObject();
+        result.addProperty("name", body.name());
+        result.addProperty("state", body.state().name().toLowerCase(Locale.ROOT));
+        result.addProperty("attached", autoAttach);
+        Location actual = body.location();
+        if (actual != null) {
+            result.add("pos", VecUtil.toArray(actual));
+            result.addProperty("world", actual.getWorld() == null ? "" : actual.getWorld().getName());
+        }
+        return result;
+    }
+
+    /** {@code body.delete}：删躯壳（校验归属）。 */
+    private JsonElement deleteBody(AgentSession session, JsonObject params) {
+        String name = Json.getString(params, "name", "");
+        boolean save = Json.getBoolean(params, "save", true);
+        if (manager.byName(name) == null) {
+            throw new JsonRpc.RpcException(JsonRpc.NOT_FOUND, "没有这个躯壳：" + name,
+                    JsonRpc.object("reason", "no_such_body", "body", name));
+        }
+        manager.remove(name, save, session.fingerprint());
+        return JsonRpc.object("ok", true, "name", name, "saved", save);
+    }
+
     /** {@code body.help}：方法清单（只有规格书没有源码的客户端用来发现能力）。 */
     private JsonElement help() {
         JsonArray methods = new JsonArray();
+        addHelp(methods, "body.list", "", "列出所有躯壳（不需要 attach）");
+        addHelp(methods, "body.create", "name, x/y/z?, world?, autoAttach=true",
+                "造一具躯壳（默认自动 attach 并推全量背包）");
+        addHelp(methods, "body.delete", "name, save=true", "删掉躯壳（只能删自己造的）");
+        addHelp(methods, "body.help", "", "列出所有方法");
         addHelp(methods, "body.attach", "name", "绑定躯壳（每躯壳同时只允许一个会话）");
         addHelp(methods, "body.detach", "", "解绑并立刻进入旁观");
-        addHelp(methods, "body.help", "", "列出所有方法");
         addHelp(methods, "body.info", "", "完整快照（同 sense.snapshot）");
         addHelp(methods, "body.spawn", "save?", "上线/恢复");
         addHelp(methods, "body.despawn", "save?", "存档并下线");

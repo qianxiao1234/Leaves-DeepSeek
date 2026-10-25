@@ -320,6 +320,7 @@ public final class AICommand implements CommandExecutor, TabCompleter {
     private void reload(CommandSender sender) {
         plugin.reloadConfig();
         manager().config().reload();
+        manager().applyConfig();
         Text.send(sender, "§a已重新读取 agent:/body: 配置。"
                 + "§7（端口与 token 变更需要重启服务器才生效）");
     }

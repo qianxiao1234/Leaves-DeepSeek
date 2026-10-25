@@ -56,8 +56,19 @@ public final class BodyStore {
         }
     }
 
-    public void delete(String name) {
-        File file = fileOf(name);
+    /**
+     * 读存档里的归属指纹；没有则返回空串（老存档 = legacy）。
+     */
+    public String ownerOf(String name) {
+        YamlConfiguration yaml = read(name);
+        if (yaml == null) {
+            return "";
+        }
+        String owner = yaml.getString("owner", "");
+        return owner == null ? "" : owner.trim();
+    }
+
+    public void delete(String name) {        File file = fileOf(name);
         if (file.isFile() && !file.delete()) {
             plugin.getLogger().warning("删除躯壳存档失败：" + file.getAbsolutePath());
         }
@@ -74,6 +85,17 @@ public final class BodyStore {
      * @return true 表示写入成功
      */
     public boolean save(String name, Bot bot, Location anchor, long createdAt, long lastSeen) {
+        return save(name, bot, anchor, createdAt, lastSeen, null);
+    }
+
+    /**
+     * 把当前实体写进存档。{@code bot} 必须在线。
+     *
+     * @param owner 躯壳归属指纹（token 的 sha256 前 16 位）；null 表示不写/保留原值
+     * @return true 表示写入成功
+     */
+    public boolean save(String name, Bot bot, Location anchor, long createdAt, long lastSeen,
+                        String owner) {
         if (bot == null || !bot.isValid()) {
             return false;
         }
@@ -81,6 +103,16 @@ public final class BodyStore {
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("name", name);
         yaml.set("uuid", bot.getUniqueId().toString());
+        if (owner != null && !owner.isBlank()) {
+            yaml.set("owner", owner);
+        } else {
+            // 没传就沿用旧存档里的 owner，避免中途被清掉
+            YamlConfiguration previous = read(name);
+            String keep = previous == null ? null : previous.getString("owner");
+            if (keep != null && !keep.isBlank()) {
+                yaml.set("owner", keep);
+            }
+        }
         yaml.set("world", location.getWorld() == null ? "" : location.getWorld().getName());
         yaml.set("x", round(location.getX()));
         yaml.set("y", round(location.getY()));

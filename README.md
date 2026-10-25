@@ -543,6 +543,8 @@ agent:
   bind: "127.0.0.1"   # 强烈建议保持只绑本机
   port: 8123
   token: ""           # 留空 = 默认 "leavesdeepseek"（插件名小写）；对外开放前请改成随机串
+  allow-create: true  # AI 能不能通过 body.create 自己造躯壳
+  allow-delete: false # AI 能不能删躯壳（只能删自己造的；默认关）
 ```
 
 ```text
@@ -565,7 +567,16 @@ ws://127.0.0.1:8123/agent
 {"jsonrpc":"2.0","id":1,"method":"body.attach","params":{"name":"Whalien"}}
 {"jsonrpc":"2.0","id":2,"method":"sense.snapshot"}
 {"jsonrpc":"2.0","id":3,"method":"act.goto","params":{"x":120,"y":70,"z":-300}}
+
+# 也可以让 AI 自己造躯壳（不需要先 attach）
+{"jsonrpc":"2.0","id":4,"method":"body.list"}
+{"jsonrpc":"2.0","id":5,"method":"body.create","params":{"name":"Whalien"}}
 ```
+
+- 躯壳生命周期（**不需要 attach 就能调**）：`body.list`（全部躯壳 + `mine` 标记）、
+  `body.create`（`name` / `x,y,z` / `world` / `autoAttach=true`）、`body.delete`（只能删自己造的）。
+  是否允许 AI 造/删由 `agent.allow-create`（默认 true）与 `agent.allow-delete`（默认 **false**）控制；
+  归属按 token 指纹判断（`body.create` 造的才有 owner），没有 owner 的老躯壳只能由管理员删。
 
 - 感知：`sense.snapshot / terrain / entity / item / blockAt / blocks / findBlock / player / canReach`，
   另有 5 Hz 的 `t:"M"`（运动）、`t:"T"`（地形语义）、`t:"P"`（附近玩家）、`t:"K"`（任务）、

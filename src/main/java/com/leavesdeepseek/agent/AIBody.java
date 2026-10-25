@@ -39,6 +39,8 @@ public final class AIBody {
     private volatile long pausedSince = System.currentTimeMillis();
     private volatile AgentSession session;
     private volatile boolean dead;
+    /** 归属指纹（token 的 sha256 前 16 位）；空 = 老躯壳/命令行创建。 */
+    private volatile String ownerKey = "";
 
     public AIBody(BodyManager manager, String name, UUID uuid, long createdAt) {
         this.manager = manager;
@@ -160,6 +162,15 @@ public final class AIBody {
 
     public void dead(boolean dead) {
         this.dead = dead;
+    }
+
+    /** 归属指纹（空 = 老躯壳，谁都不能通过 RPC 删）。 */
+    public String ownerKey() {
+        return ownerKey;
+    }
+
+    public void ownerKey(String ownerKey) {
+        this.ownerKey = ownerKey == null ? "" : ownerKey;
     }
 
     public BodyController controller() {

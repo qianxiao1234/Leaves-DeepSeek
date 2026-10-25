@@ -19,6 +19,8 @@ public final class AgentSession {
 
     private volatile boolean authenticated;
     private volatile long connectAt = System.currentTimeMillis();
+    /** 鉴权成功时记录的 token 指纹（躯壳归属用，不存明文）。 */
+    private volatile String fingerprint = "";
 
     private int actionWindowSecond = -1;
     private int actionCount;
@@ -44,6 +46,14 @@ public final class AgentSession {
 
     public long connectAt() {
         return connectAt;
+    }
+
+    public String fingerprint() {
+        return fingerprint;
+    }
+
+    public void fingerprint(String fingerprint) {
+        this.fingerprint = fingerprint == null ? "" : fingerprint;
     }
 
     public void touch() {

@@ -190,6 +190,7 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
      *   <li>v6 -> v7：{@code deepseek.max-tokens} 旧默认值 1024 提到 4096（推理型模型需要更多输出额度）。</li>
      *   <li>v7 -> v8：{@code companion.auto-follow} 旧默认值 true 改为 false（不再默认跟随主人）。</li>
      *   <li>v8 -> v9：新增 {@code agent:} / {@code body:} 两段（AI 躯壳子系统，默认关闭）。</li>
+     *   <li>v9 -> v10：新增 {@code agent.allow-create} / {@code allow-delete} 等（AI 自建/自删躯壳）。</li>
      * </ul>
      */
     private void migrateConfig() {
@@ -328,6 +329,20 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
             changed = true;
             getLogger().info("config.yml 已升级到 v9：新增 agent:/body: 两段（AI 躯壳子系统，默认关闭）。");
             version = 9;
+        }
+
+        if (version < 10) {
+            // V2：AI 自己造/删躯壳的开关与落点配置
+            setIfMissing(config, "agent.allow-create", true);
+            setIfMissing(config, "agent.allow-delete", false);
+            setIfMissing(config, "agent.create-default-world", "");
+            setIfMissing(config, "agent.create-default-y-offset", 0);
+            setIfMissing(config, "agent.body-name-regex", "");
+            setIfMissing(config, "agent.audit-create", true);
+            config.set("config-version", 10);
+            changed = true;
+            getLogger().info("config.yml 已升级到 v10：新增 agent.allow-create / allow-delete 等（AI 自建躯壳）。");
+            version = 10;
         }
 
         if (changed) {

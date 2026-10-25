@@ -4,7 +4,7 @@
 # ============================================================
 
 # 配置版本（插件据此自动迁移旧配置，请勿手动删除）
-config-version: 9
+config-version: 10
 
 deepseek:
   # 服务器全局 API Key。留空表示不提供全局 Key（默认留空，由服主决定是否开放）
@@ -225,6 +225,19 @@ agent:
   # 外部 AI 用它做 auth。留空 = 默认值 "leavesdeepseek"（插件名小写）
   # 对局域网/公网开放前建议改成一串随机字符
   token: ""
+  # AI 能不能通过 RPC（body.create）自己造躯壳；false 时只有 OP 的 /ai body create 能用
+  allow-create: true
+  # AI 能不能通过 RPC（body.delete）删躯壳。默认 false = 谁都不能删；
+  # 改成 true 后也只能删「自己造的」（按 token 指纹判归属，老躯壳一律拒绝）
+  allow-delete: false
+  # body.create 不指定世界时的落点：空 = 主世界重生点
+  create-default-world: ""
+  # 出生点抬高多少格（防卡在方块里）
+  create-default-y-offset: 0
+  # 自定义躯壳名规则（Java 正则，整串匹配）；空 = 内置 3~16 位字母/数字/下划线
+  body-name-regex: ""
+  # 造/删躯壳是否写审计日志
+  audit-create: true
   max-bodies-per-session: 1
   auth-timeout-seconds: 5
   max-frame-bytes: 65536
