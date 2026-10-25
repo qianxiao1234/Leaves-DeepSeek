@@ -43,6 +43,13 @@ public final class BodyManager {
     private final Map<String, Long> lastAnnounce = new java.util.concurrent.ConcurrentHashMap<>();
     /** 已经「存过档并清空背包」的实体（防止二次调用把空背包写回存档）。 */
     private final Set<UUID> clearedInventories = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 每个实体「最近一秒看到的状态」：只在极短时间内被外力清空时才用它兜底。 */
+    private record Cached(long at, BodyStore.Snapshot snapshot) {
+    }
+
+    private final Map<UUID, Cached> lastGood = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 兜底窗口：只有"刚刚（3 秒内）还有东西、现在空了"才认为是被外力清掉的。 */
+    private static final long CACHE_WINDOW_MS = 3000L;
 
     public BodyManager(LeavesDeepSeekPlugin plugin, AgentConfig config) {
         this.plugin = plugin;
@@ -324,10 +331,18 @@ public final class BodyManager {
         Bot bot = body.bot();
         if (bot != null && bot.isValid()) {
             if (save) {
-                store.save(name, bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey(), body.dead());
+                persistAndRemove(body);
+            } else {
+                // 删档：也先清空背包再移除，否则装备会掉在地上
+                clearedInventories.add(bot.getUniqueId());
+                clearInventory(bot);
+                try {
+                    bot.remove(false);
+                } catch (Throwable throwable) {
+                    plugin.log().warn("躯壳", "移除躯壳实体失败（" + name + "）：" + throwable.getMessage());
+                }
+                lastGood.remove(bot.getUniqueId());
             }
-            clearInventory(bot);
-            bot.remove(false);
         }
         body.bot(null);
         body.state(AIBody.State.OFFLINE);
@@ -372,17 +387,10 @@ public final class BodyManager {
         }
     }
 
-    /** 下线：存档 + 实体移出世界。 */
+    /** 下线：存档（含背包/装备/血量/经验）+ 清空背包 + 实体移出世界。 */
     public void offline(AIBody body, String reason) {
-        Bot bot = body.bot();
         body.controller().stopAll(JsonRpc.nameOf(JsonRpc.BODY_OFFLINE));
-        if (bot != null && bot.isValid()) {
-            store.save(body.name(), bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey(), body.dead());
-            clearInventory(bot);
-            bot.remove(false);
-        }
-        body.bot(null);
-        body.state(AIBody.State.OFFLINE);
+        persistAndRemove(body);
         body.sensors().stateEvent(AIBody.State.OFFLINE, reason);
         auditEvent(body.name(), "ev.state", JsonRpc.object("state", "offline", "reason", reason));
     }
@@ -420,8 +428,15 @@ public final class BodyManager {
         }
         body.bot(bot);
         clearedInventories.remove(bot.getUniqueId());
+        lastGood.remove(bot.getUniqueId());
         if (yaml != null) {
             store.apply(bot, yaml);
+            BodyStore.Snapshot restored = BodyStore.Snapshot.of(bot);
+            lastGood.put(bot.getUniqueId(), new Cached(System.currentTimeMillis(), restored));
+            plugin.log().info("躯壳", "已按存档还原 " + body.name()
+                    + " | 物品格=" + restored.itemCount()
+                    + " | 血量=" + Math.round(restored.health() * 10) / 10.0
+                    + " | 经验=" + restored.totalXp() + "(" + restored.level() + "级)");
         }
         body.state(AIBody.State.PAUSED);
         body.guard().resume(reason);
@@ -459,15 +474,31 @@ public final class BodyManager {
         if (body == null || !body.online()) {
             return false;
         }
-        return store.save(name, body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey(), body.dead());
+        Bot bot = body.bot();
+        BodyStore.Snapshot live = BodyStore.Snapshot.of(bot);
+        Cached cached = lastGood.get(bot.getUniqueId());
+        BodyStore.Snapshot use = live;
+        if (!live.hasItems() && cached != null && cached.snapshot().hasItems()
+                && System.currentTimeMillis() - cached.at() <= CACHE_WINDOW_MS) {
+            use = cached.snapshot();
+        }
+        boolean saved = store.saveSnapshot(name, bot, body.anchor(), body.createdAt(), body.lastSeen(),
+                body.ownerKey(), body.dead(), use);
+        if (saved) {
+            lastGood.put(bot.getUniqueId(), new Cached(System.currentTimeMillis(), use));
+        }
+        return saved;
     }
 
     /**
-     * 实体被移除前的保存点：**先存档，再清空背包**，避免 Leaves 移除假人时的 {@code dropAll(true)}
-     * 把装备撒在地上、下次启动又从存档恢复一份（凭空多一套）。
+     * 实体被移除前的保存点：**先存档，再清空背包**。
      *
-     * <p>与传统假人的 {@code BotStateService.saveAndClear()} 同一套思路：
-     * 存档写失败就不清背包 —— 宁可掉在地上，也不能让东西凭空消失。</p>
+     * <p>为什么必须清空：Leaves 移除假人时走 {@code removeBot(..., save=false)} → {@code dropAll(true)}，
+     * 不清空就会把装备撒在地上，下次启动又从存档恢复一份（凭空多一套）。
+     * 与传统假人的 {@code BotStateService.saveAndClear()} 完全同一套思路。</p>
+     *
+     * <p>为什么需要 {@code lastGood}：有些退出路径（如 {@code offline()} 先清背包再 remove）
+     * 会让实体背包变成空的，这时如果直接写盘就把存档洗成空的了。</p>
      *
      * @return true 表示已保存并清空（或此前已经处理过）
      */
@@ -480,16 +511,69 @@ public final class BodyManager {
             // 已经存过并清过：绝不能再用「空背包」覆盖存档
             return true;
         }
-        boolean saved = store.save(body.name(), bot, body.anchor(), body.createdAt(),
-                System.currentTimeMillis(), body.ownerKey(), body.dead());
+        BodyStore.Snapshot live = BodyStore.Snapshot.of(bot);
+        Cached cached = lastGood.get(bot.getUniqueId());
+        BodyStore.Snapshot use = live;
+        String source = "live";
+        boolean freshCache = cached != null
+                && System.currentTimeMillis() - cached.at() <= CACHE_WINDOW_MS
+                && cached.snapshot().hasItems();
+        if (!live.hasItems() && freshCache) {
+            // 背包在最近 3 秒内被外力清空（例如服务端先 dropAll）：用刚才的快照写盘
+            use = cached.snapshot();
+            source = "cached";
+        }
+        boolean saved = store.saveSnapshot(body.name(), bot, body.anchor(), body.createdAt(),
+                System.currentTimeMillis(), body.ownerKey(), body.dead(), use);
         if (!saved) {
             clearedInventories.remove(bot.getUniqueId());
             plugin.log().warn("躯壳", "存档失败，为防丢东西不清空背包：" + body.name());
             return false;
         }
         clearInventory(bot);
-        plugin.log().info("躯壳", "已存档并清空躯壳 " + body.name() + " 的背包（移除时不会掉落）");
+        plugin.log().info("躯壳", "已存档并清空躯壳 " + body.name()
+                + " | 物品格=" + use.itemCount()
+                + " | 血量=" + Math.round(use.health() * 10) / 10.0
+                + " | 经验=" + use.totalXp() + "(" + use.level() + "级)"
+                + " | 来源=" + source + "（移除时不会掉落）");
         return true;
+    }
+
+    /** 每秒记一次当前状态，供「移除瞬间背包已被清空」时兜底。 */
+    private void rememberSnapshot(Bot bot) {
+        if (bot == null || !bot.isValid()) {
+            return;
+        }
+        try {
+            lastGood.put(bot.getUniqueId(),
+                    new Cached(System.currentTimeMillis(), BodyStore.Snapshot.of(bot)));
+        } catch (RuntimeException ignored) {
+            // 记不上就算了，不能影响主循环
+        }
+    }
+
+    /**
+     * 所有「让躯壳离开世界」的路径的唯一入口：存档 → 清空背包 → 移除实体。
+     *
+     * <p>顺序不能反，而且要保证 {@link #saveAndClear(Bot)} 只跑一次
+     * （{@code bot.remove()} 会触发 {@code BotRemoveEvent}，那里还会再调一次）。</p>
+     */
+    private void persistAndRemove(AIBody body) {
+        Bot bot = body.bot();
+        if (bot == null || !bot.isValid()) {
+            body.bot(null);
+            body.state(AIBody.State.OFFLINE);
+            return;
+        }
+        saveAndClear(bot);
+        try {
+            bot.remove(false);
+        } catch (Throwable throwable) {
+            plugin.log().warn("躯壳", "移除躯壳实体失败（" + body.name() + "）：" + throwable.getMessage());
+        }
+        lastGood.remove(bot.getUniqueId());
+        body.bot(null);
+        body.state(AIBody.State.OFFLINE);
     }
 
     private void clearInventory(Bot bot) {
@@ -507,6 +591,7 @@ public final class BodyManager {
     /** 20 Hz（主线程）。 */
     public void tick() {
         ticks++;
+        boolean snapshotTick = ticks % 20 == 0;
         double[] tps = Bukkit.getTPS();
         double current = tps.length == 0 ? 20.0 : tps[0];
         for (AIBody body : bodies()) {
@@ -521,6 +606,9 @@ public final class BodyManager {
                 if (body.online()) {
                     body.controller().tick();
                     body.sensors().tick();
+                    if (snapshotTick) {
+                        rememberSnapshot(body.bot());
+                    }
                 }
                 body.guard().tick();
             } catch (Throwable throwable) {
@@ -532,7 +620,7 @@ public final class BodyManager {
             saveCounter = 0;
             for (AIBody body : bodies()) {
                 if (body.online()) {
-                    store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey(), body.dead());
+                    save(body.name());
                 }
             }
         }
@@ -745,12 +833,9 @@ public final class BodyManager {
         for (AIBody body : bodies()) {
             body.controller().stopAll("SHUTDOWN");
             if (body.online()) {
-                // 关服/重载前必须「先存档再清空背包」：Leaves 移除假人时会 dropAll，
+                // 关服/重载前必须「先存档再清空背包再移除」：Leaves 移除假人时会 dropAll，
                 // 不清空就会把装备丢在地上，下次启动又从存档恢复一份（凭空多一套）。
-                if (!saveAndClear(body.bot())) {
-                    store.save(body.name(), body.bot(), body.anchor(), body.createdAt(),
-                            body.lastSeen(), body.ownerKey(), body.dead());
-                }
+                persistAndRemove(body);
             }
         }
         AgentServer current = server;

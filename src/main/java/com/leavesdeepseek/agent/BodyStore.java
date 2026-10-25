@@ -161,6 +161,46 @@ public final class BodyStore {
     }
 
     /**
+     * 一份完整的「要写进存档」的快照（背包 + 装备 + 血量 + 经验）。
+     * 单独拎出来是为了：实体背包被清空时，还能用上一次记下的好数据写盘。
+     */
+    public record Snapshot(ItemStack[] contents, double health, int food, float saturation,
+                           int totalXp, int level, float exp) {
+
+        public static Snapshot of(Bot bot) {
+            PlayerInventory inventory = bot.getInventory();
+            return new Snapshot(inventory.getContents(), bot.getHealth(), bot.getFoodLevel(),
+                    bot.getSaturation(), bot.getTotalExperience(), bot.getLevel(), bot.getExp());
+        }
+
+        /** 背包里（含盔甲/副手）有没有东西。 */
+        public boolean hasItems() {
+            if (contents == null) {
+                return false;
+            }
+            for (ItemStack stack : contents) {
+                if (stack != null && !stack.getType().isAir()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** 非空物品格数（日志用）。 */
+        public int itemCount() {
+            int count = 0;
+            if (contents != null) {
+                for (ItemStack stack : contents) {
+                    if (stack != null && !stack.getType().isAir()) {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        }
+    }
+
+    /**
      * 把当前实体写进存档。{@code bot} 必须在线。
      *
      * @return true 表示写入成功
@@ -192,6 +232,22 @@ public final class BodyStore {
         if (bot == null || !bot.isValid()) {
             return false;
         }
+        return write(name, bot, anchor, createdAt, lastSeen, owner, downed, Snapshot.of(bot));
+    }
+
+    /**
+     * 用外部给的快照写档（实体背包可能已被清空，用缓存兜底时使用）。
+     */
+    public boolean saveSnapshot(String name, Bot bot, Location anchor, long createdAt, long lastSeen,
+                                String owner, boolean downed, Snapshot snapshot) {
+        if (bot == null || !bot.isValid() || snapshot == null) {
+            return false;
+        }
+        return write(name, bot, anchor, createdAt, lastSeen, owner, downed, snapshot);
+    }
+
+    private boolean write(String name, Bot bot, Location anchor, long createdAt, long lastSeen,
+                          String owner, boolean downed, Snapshot snapshot) {
         Location location = bot.getLocation();
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("name", name);
@@ -212,12 +268,12 @@ public final class BodyStore {
         yaml.set("z", round(location.getZ()));
         yaml.set("yaw", round(location.getYaw()));
         yaml.set("pitch", round(location.getPitch()));
-        yaml.set("health", round(bot.getHealth()));
-        yaml.set("food", bot.getFoodLevel());
-        yaml.set("saturation", round(bot.getSaturation()));
-        yaml.set("xp", bot.getTotalExperience());
-        yaml.set("level", bot.getLevel());
-        yaml.set("exp", round(bot.getExp()));
+        yaml.set("health", round(snapshot.health()));
+        yaml.set("food", snapshot.food());
+        yaml.set("saturation", round(snapshot.saturation()));
+        yaml.set("xp", snapshot.totalXp());
+        yaml.set("level", snapshot.level());
+        yaml.set("exp", round(snapshot.exp()));
         yaml.set("gamemode", bot.getGameMode() == null ? "SURVIVAL" : bot.getGameMode().name());
         if (anchor != null && anchor.getWorld() != null) {
             yaml.set("anchor.world", anchor.getWorld().getName());
@@ -226,7 +282,7 @@ public final class BodyStore {
             yaml.set("anchor.z", round(anchor.getZ()));
         }
         PlayerInventory inventory = bot.getInventory();
-        ItemStack[] contents = inventory.getContents();
+        ItemStack[] contents = snapshot.contents();
         for (int i = 0; i < contents.length; i++) {
             ItemStack stack = contents[i];
             if (stack == null || stack.getType().isAir()) {
@@ -235,11 +291,12 @@ public final class BodyStore {
             yaml.set("inventory." + i, stack);
         }
         yaml.set("heldSlot", inventory.getHeldItemSlot());
-        yaml.set("armor.helmet", inventory.getHelmet());
-        yaml.set("armor.chestplate", inventory.getChestplate());
-        yaml.set("armor.leggings", inventory.getLeggings());
-        yaml.set("armor.boots", inventory.getBoots());
-        yaml.set("armor.offhand", inventory.getItemInOffHand());
+        // 盔甲/副手也一律取自快照（背包被清空时不能写成 null）
+        yaml.set("armor.boots", at(contents, 36));
+        yaml.set("armor.leggings", at(contents, 37));
+        yaml.set("armor.chestplate", at(contents, 38));
+        yaml.set("armor.helmet", at(contents, 39));
+        yaml.set("armor.offhand", at(contents, 40));
 
         List<String> effects = new ArrayList<>();
         for (PotionEffect effect : bot.getActivePotionEffects()) {
@@ -266,51 +323,118 @@ public final class BodyStore {
     }
 
     /**
-     * 把存档写回一个在线的实体（创建/唤醒/旁观切回后调用）。
+     * 把存档写回一个在线的实体（创建/唤醒/重启后调用）。
+     *
+     * <p>血量、经验、背包、装备四项都必须恢复；背包/装备逐槽容错，
+     * 单格出错不能导致后面的东西也不还原。</p>
      */
     public void apply(Bot bot, YamlConfiguration yaml) {
         if (bot == null || !bot.isValid() || yaml == null) {
             return;
         }
-        try {
-            World world = org.bukkit.Bukkit.getWorld(yaml.getString("world", ""));
-            if (world != null) {
+        World world = org.bukkit.Bukkit.getWorld(yaml.getString("world", ""));
+        if (world != null) {
+            try {
                 Location location = new Location(world,
                         yaml.getDouble("x"), yaml.getDouble("y"), yaml.getDouble("z"),
                         (float) yaml.getDouble("yaw"), (float) yaml.getDouble("pitch"));
                 bot.teleport(location);
+            } catch (Throwable throwable) {
+                plugin.getLogger().warning("躯壳传送失败：" + throwable.getMessage());
             }
+        }
+        // 血量 / 饥饿 / 经验
+        try {
             String mode = yaml.getString("gamemode", "SURVIVAL");
             bot.setGameMode(mode == null ? GameMode.SURVIVAL : GameMode.valueOf(mode));
-            bot.setHealth(Math.max(1.0, Math.min(bot.getMaxHealth(), yaml.getDouble("health", bot.getMaxHealth()))));
+        } catch (Throwable ignored) {
+            // 游戏模式写不进去不影响其它数据
+        }
+        try {
+            double health = yaml.getDouble("health", bot.getMaxHealth());
+            bot.setHealth(Math.max(1.0, Math.min(bot.getMaxHealth(), health)));
+        } catch (Throwable throwable) {
+            plugin.getLogger().warning("恢复血量失败：" + throwable.getMessage());
+        }
+        try {
             bot.setFoodLevel(Math.max(0, Math.min(20, yaml.getInt("food", 20))));
             bot.setSaturation((float) Math.max(0.0, Math.min(20.0, yaml.getDouble("saturation", 5.0))));
-            bot.setTotalExperience(Math.max(0, yaml.getInt("xp", 0)));
+        } catch (Throwable ignored) {
+            // 饥饿值失败不影响背包
+        }
+        try {
             bot.setLevel(Math.max(0, yaml.getInt("level", 0)));
             bot.setExp((float) Math.max(0.0, Math.min(1.0, yaml.getDouble("exp", 0.0))));
+            bot.setTotalExperience(Math.max(0, yaml.getInt("xp", 0)));
+        } catch (Throwable throwable) {
+            plugin.getLogger().warning("恢复经验失败：" + throwable.getMessage());
+        }
 
-            PlayerInventory inventory = bot.getInventory();
-            if (yaml.isConfigurationSection("inventory")) {
-                for (String key : yaml.getConfigurationSection("inventory").getKeys(false)) {
-                    int slot;
-                    try {
-                        slot = Integer.parseInt(key);
-                    } catch (NumberFormatException exception) {
-                        continue;
+        // 背包：41 槽全量（含盔甲 36-39、副手 40）
+        PlayerInventory inventory = bot.getInventory();
+        int restored = 0;
+        if (yaml.isConfigurationSection("inventory")) {
+            for (String key : yaml.getConfigurationSection("inventory").getKeys(false)) {
+                int slot;
+                try {
+                    slot = Integer.parseInt(key);
+                } catch (NumberFormatException exception) {
+                    continue;
+                }
+                if (slot < 0 || slot >= inventory.getSize()) {
+                    continue;
+                }
+                ItemStack stack = null;
+                try {
+                    stack = yaml.getItemStack("inventory." + key);
+                } catch (Throwable throwable) {
+                    plugin.getLogger().warning("读取背包槽 " + slot + " 失败：" + throwable.getMessage());
+                }
+                try {
+                    inventory.setItem(slot, stack);
+                    if (stack != null && !stack.getType().isAir()) {
+                        restored++;
                     }
-                    if (slot < 0 || slot >= inventory.getSize()) {
-                        continue;
-                    }
-                    inventory.setItem(slot, yaml.getItemStack("inventory." + key));
+                } catch (Throwable throwable) {
+                    plugin.getLogger().warning("恢复背包槽 " + slot + " 失败：" + throwable.getMessage());
                 }
             }
+        }
+        // 盔甲/副手单独再写一遍（槽位 API 在不同服务端实现上行为不完全一致）
+        try {
+            if (inventory.getHelmet() == null) {
+                inventory.setHelmet(yaml.getItemStack("armor.helmet"));
+            }
+            if (inventory.getChestplate() == null) {
+                inventory.setChestplate(yaml.getItemStack("armor.chestplate"));
+            }
+            if (inventory.getLeggings() == null) {
+                inventory.setLeggings(yaml.getItemStack("armor.leggings"));
+            }
+            if (inventory.getBoots() == null) {
+                inventory.setBoots(yaml.getItemStack("armor.boots"));
+            }
+            if (inventory.getItemInOffHand() == null || inventory.getItemInOffHand().getType().isAir()) {
+                ItemStack offhand = yaml.getItemStack("armor.offhand");
+                if (offhand != null && !offhand.getType().isAir()) {
+                    inventory.setItemInOffHand(offhand);
+                }
+            }
+        } catch (Throwable throwable) {
+            plugin.getLogger().warning("恢复盔甲失败：" + throwable.getMessage());
+        }
+        try {
             inventory.setHeldItemSlot(Math.max(0, Math.min(8, yaml.getInt("heldSlot", 0))));
-            inventory.setHelmet(yaml.getItemStack("armor.helmet"));
-            inventory.setChestplate(yaml.getItemStack("armor.chestplate"));
-            inventory.setLeggings(yaml.getItemStack("armor.leggings"));
-            inventory.setBoots(yaml.getItemStack("armor.boots"));
-            inventory.setItemInOffHand(yaml.getItemStack("armor.offhand"));
+        } catch (Throwable ignored) {
+            // 手持槽失败无所谓
+        }
+        plugin.getLogger().info("躯壳读档 " + yaml.getString("name", "?")
+                + " | 物品格=" + restored + " / 盔甲=" + armorSummary(inventory)
+                + " | 血量=" + Math.round(bot.getHealth() * 10) / 10.0
+                + " | 经验=" + bot.getTotalExperience() + "(" + bot.getLevel() + "级)");
 
+        // 药水效果
+        try {
             for (PotionEffect effect : bot.getActivePotionEffects()) {
                 bot.removePotionEffect(effect.getType());
             }
@@ -331,9 +455,31 @@ public final class BodyStore {
                 }
             }
         } catch (Throwable throwable) {
-            plugin.getLogger().warning("应用躯壳存档失败：" + throwable.getMessage());
-            throwable.printStackTrace();
+            plugin.getLogger().warning("恢复药水效果失败：" + throwable.getMessage());
         }
+    }
+
+    private static String armorSummary(PlayerInventory inventory) {
+        int count = 0;
+        try {
+            for (ItemStack stack : new ItemStack[]{inventory.getHelmet(), inventory.getChestplate(),
+                    inventory.getLeggings(), inventory.getBoots(), inventory.getItemInOffHand()}) {
+                if (stack != null && !stack.getType().isAir()) {
+                    count++;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            return "?";
+        }
+        return String.valueOf(count);
+    }
+
+    private static ItemStack at(ItemStack[] contents, int index) {
+        if (contents == null || index < 0 || index >= contents.length) {
+            return null;
+        }
+        ItemStack stack = contents[index];
+        return stack == null || stack.getType().isAir() ? null : stack;
     }
 
     private static double round(double value) {
