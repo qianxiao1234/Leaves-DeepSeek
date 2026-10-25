@@ -89,6 +89,7 @@ public final class AgentEvents implements Listener {
                 "dropKept", true,
                 "downed", true));
         manager().auditEvent(body.name(), "ev.death", JsonRpc.object("cause", cause));
+        manager().announceDeath(body, cause);
         // 死亡瞬间先存档：背包/装备/经验都还在，重启也能恢复
         manager().save(body.name());
 

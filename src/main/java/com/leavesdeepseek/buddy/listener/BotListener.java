@@ -134,6 +134,9 @@ public final class BotListener implements Listener {
                 "dropKept", true,
                 "downed", true));
         plugin.log().info("躯壳", "躯壳 " + body.name() + " 倒下了（物品已保留），等 revive | cause=" + cause);
+        if (plugin.bodyManager() != null) {
+            plugin.bodyManager().announceDeath(body, cause);
+        }
     }
 
     /**

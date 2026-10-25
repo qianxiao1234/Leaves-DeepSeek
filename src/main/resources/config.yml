@@ -4,7 +4,7 @@
 # ============================================================
 
 # 配置版本（插件据此自动迁移旧配置，请勿手动删除）
-config-version: 11
+config-version: 12
 
 deepseek:
   # 服务器全局 API Key。留空表示不提供全局 Key（默认留空，由服主决定是否开放）
@@ -241,6 +241,9 @@ agent:
   auto-load: true
   # 躯壳死亡是否保留物品（像传统假人一样一件不掉，倒地等 revive）
   keep-inventory: true
+  # 躯壳倒地 / 站起来 时是否全服广播（聊天栏提示）
+  announce-death: true
+  announce-respawn: true
   max-bodies-per-session: 1
   auth-timeout-seconds: 5
   max-frame-bytes: 65536
@@ -252,7 +255,8 @@ agent:
   idle-to-paused-seconds: 90
   paused-to-offline-seconds: 300
   auto-respawn: false
-  respawn-delay-seconds: 0
+  # 自动复活延迟（agent.auto-respawn: true 时才用；插件侧客户端自己 respawn 时不看这个）
+  respawn-delay-seconds: 5
   audit: true
   # 感知推送频率与半径
   sense:

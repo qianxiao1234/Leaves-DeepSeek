@@ -43,6 +43,9 @@ public final class AgentConfig {
     private boolean autoLoad = true;
     /** 躯壳死亡是否保留物品（true = 像传统假人一样，一件不掉）。 */
     private boolean keepInventory = true;
+    /** 躯壳倒地/复活是否全服广播。 */
+    private boolean announceDeath = true;
+    private boolean announceRespawn = true;
 
     /** AI 能不能通过 RPC 造躯壳（false 时只有 /ai body create 可用）。 */
     private boolean allowCreate = true;
@@ -102,6 +105,8 @@ public final class AgentConfig {
         audit = config.getBoolean("agent.audit", true);
         autoLoad = config.getBoolean("agent.auto-load", true);
         keepInventory = config.getBoolean("agent.keep-inventory", true);
+        announceDeath = config.getBoolean("agent.announce-death", true);
+        announceRespawn = config.getBoolean("agent.announce-respawn", true);
 
         allowCreate = config.getBoolean("agent.allow-create", true);
         allowDeleteMode = normalizeDeleteMode(config.get("agent.allow-delete"));
@@ -271,6 +276,14 @@ public final class AgentConfig {
 
     public boolean keepInventory() {
         return keepInventory;
+    }
+
+    public boolean announceDeath() {
+        return announceDeath;
+    }
+
+    public boolean announceRespawn() {
+        return announceRespawn;
     }
 
     public boolean allowCreate() {

@@ -194,6 +194,7 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
      *   <li>v8 -> v9：新增 {@code agent:} / {@code body:} 两段（AI 躯壳子系统，默认关闭）。</li>
      *   <li>v9 -> v10：新增 {@code agent.allow-create} / {@code allow-delete} 等（AI 自建/自删躯壳）。</li>
      *   <li>v10 -> v11：新增 {@code agent.auto-load} / {@code keep-inventory}，{@code allow-delete} 改三态。</li>
+     *   <li>v11 -> v12：新增 {@code agent.announce-death} / {@code announce-respawn}（躯壳倒地/复活全服广播）。</li>
      * </ul>
      */
     private void migrateConfig() {
@@ -364,6 +365,16 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
             getLogger().info("config.yml 已升级到 v11：新增 agent.auto-load / keep-inventory，"
                     + "allow-delete 改为 own|all|false（默认 own）。");
             version = 11;
+        }
+
+        if (version < 12) {
+            // 躯壳倒地/复活的全服广播开关（客户端自己 respawn 时也能看到提示）
+            setIfMissing(config, "agent.announce-death", true);
+            setIfMissing(config, "agent.announce-respawn", true);
+            config.set("config-version", 12);
+            changed = true;
+            getLogger().info("config.yml 已升级到 v12：新增 agent.announce-death / announce-respawn（躯壳倒地广播）。");
+            version = 12;
         }
 
         if (changed) {

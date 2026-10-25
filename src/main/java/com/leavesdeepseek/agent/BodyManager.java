@@ -37,6 +37,8 @@ public final class BodyManager {
     private AgentServer server;
     private int ticks;
     private int saveCounter;
+    /** 广播去重（同一具躯壳 1.5 秒内只播一次）。 */
+    private final Map<String, Long> lastAnnounce = new java.util.concurrent.ConcurrentHashMap<>();
 
     public BodyManager(LeavesDeepSeekPlugin plugin, AgentConfig config) {
         this.plugin = plugin;
@@ -579,6 +581,7 @@ public final class BodyManager {
         body.dead(false);
         body.guard().resume("revive");
         store.save(body.name(), bot, anchor, body.createdAt(), System.currentTimeMillis(), body.ownerKey(), false);
+        announceRespawn(body);
         plugin.log().info("躯壳", "已复活躯壳 " + body.name() + "（物品保留）");
     }
 
@@ -586,6 +589,45 @@ public final class BodyManager {
     public String tokenFingerprintOf(String name) {
         String token = store.tokenOf(name);
         return token.isBlank() ? "" : fingerprintOf(token);
+    }
+
+    /**
+     * 全服广播“躯壳倒地”（1.5 秒内同一具只播一次，BotDeathEvent 与 PlayerDeathEvent 会重复触发）。
+     */
+    public void announceDeath(AIBody body, String cause) {
+        if (body == null || !config.announceDeath()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Long last = lastAnnounce.get(body.name());
+        if (last != null && now - last < 1500L) {
+            return;
+        }
+        lastAnnounce.put(body.name(), now);
+        broadcast("§8[§b躯壳§8] §f" + body.name() + " §c被打倒了"
+                + (cause == null || cause.isBlank() ? "" : "§7（" + cause + "§7）")
+                + "§c，物品已保留，稍后会站起来。");
+    }
+
+    /** 全服广播“躯壳站起来了”。 */
+    public void announceRespawn(AIBody body) {
+        if (body == null || !config.announceRespawn()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Long last = lastAnnounce.get(body.name() + ":respawn");
+        if (last != null && now - last < 1500L) {
+            return;
+        }
+        lastAnnounce.put(body.name() + ":respawn", now);
+        broadcast("§8[§b躯壳§8] §f" + body.name() + " §a站起来了。");
+    }
+
+    private void broadcast(String message) {
+        for (org.bukkit.entity.Player player : Bukkit.getOnlinePlayers()) {
+            com.leavesdeepseek.buddy.util.Text.send(player, message);
+        }
+        plugin.log().info("躯壳", message.replaceAll("§.", ""));
     }
 
     public List<String> names() {

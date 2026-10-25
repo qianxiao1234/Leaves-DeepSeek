@@ -557,6 +557,11 @@ public final class AgentServer extends WebSocketServer {
             throw new JsonRpc.RpcException(JsonRpc.SPECTATOR, "躯壳当前不可操作（state="
                     + body.state().name().toLowerCase(Locale.ROOT) + "）");
         }
+        if (body.dead()) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED,
+                    "躯壳处于倒地状态，先 body.respawn 复活（物品已保留）",
+                    JsonRpc.object("reason", "downed", "body", body.name()));
+        }
         boolean interrupt = Json.getBoolean(params, "interrupt", true);
         switch (method) {
             case "act.goto": {
