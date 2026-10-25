@@ -21,6 +21,8 @@ public final class AgentSession {
     private volatile long connectAt = System.currentTimeMillis();
     /** 鉴权成功时记录的 token 指纹（躯壳归属用，不存明文）。 */
     private volatile String fingerprint = "";
+    /** 用「躯壳专属 token」连上来时，直接绑定这具躯壳（null = 全局 token）。 */
+    private volatile String boundBody;
 
     private int actionWindowSecond = -1;
     private int actionCount;
@@ -54,6 +56,15 @@ public final class AgentSession {
 
     public void fingerprint(String fingerprint) {
         this.fingerprint = fingerprint == null ? "" : fingerprint;
+    }
+
+    /** 躯壳专属 token 绑定的躯壳名（null = 全局 token，可操作任何躯壳）。 */
+    public String boundBody() {
+        return boundBody;
+    }
+
+    public void boundBody(String boundBody) {
+        this.boundBody = boundBody;
     }
 
     public void touch() {

@@ -27,7 +27,7 @@ public final class AICommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> BODY_SUBS = List.of(
             "create", "list", "info", "remove", "save", "load", "take", "release",
-            "move", "anchor", "config", "reload");
+            "move", "anchor", "set", "revive", "config", "reload");
 
     private final LeavesDeepSeekPlugin plugin;
 
@@ -79,6 +79,8 @@ public final class AICommand implements CommandExecutor, TabCompleter {
                 case "release" -> release(sender, args);
                 case "move" -> move(sender, args);
                 case "anchor" -> anchor(sender, args);
+                case "set" -> setToken(sender, args);
+                case "revive" -> reviveBody(sender, args);
                 case "config" -> config(sender, args);
                 case "reload" -> reload(sender);
                 default -> help(sender, label);
@@ -103,6 +105,8 @@ public final class AICommand implements CommandExecutor, TabCompleter {
         Text.send(sender, "§f/" + label + " body release <name> §7- 释放控制（等 AI 重连）");
         Text.send(sender, "§f/" + label + " body move <name> <x y z> [world] §7- 卡地形救场");
         Text.send(sender, "§f/" + label + " body anchor <name> set|clear §7- 死亡重生点");
+        Text.send(sender, "§f/" + label + " body set <token> [名字] §7- 给躯壳设独立 token（clear = 用全局）");
+        Text.send(sender, "§f/" + label + " body revive <name> §7- 倒地后救起来（物品一件不少）");
         Text.send(sender, "§f/" + label + " body config <name> <key> <value> §7- 单躯壳覆盖配置");
         Text.send(sender, "§f/" + label + " body reload §7- 重新读 agent:/body: 配置");
         Text.send(sender, "§7外部 AI 通过 WebSocket（§fws://" + configHint() + "§7）接管躯壳。");
@@ -186,14 +190,20 @@ public final class AICommand implements CommandExecutor, TabCompleter {
         Text.send(sender, "§7任务：§f" + (body.controller().current() == null ? "空闲"
                 : body.controller().current().type() + " (" + body.controller().current().id() + ")")
                 + " §7队列：§f" + Math.max(0, body.controller().snapshot().size() - 1));
+        if (body.dead()) {
+            Text.send(sender, "§c状态：倒地（物品已保留）§7- 用 §f/ai body revive " + body.name() + " §7救起");
+        }
+        String token = manager().store().tokenOf(body.name());
+        Text.send(sender, "§7专属 token：§f"
+                + (token.isBlank() ? "（未设置，用全局 agent.token）" : mask(token))
+                + " §7目录：§fplugins/LeavesDeepSeek/bodies/" + body.name() + "/");
         if (!body.overrides().isEmpty()) {
             Text.send(sender, "§7覆盖配置：§f" + body.overrides());
         }
     }
 
     private void remove(CommandSender sender, String[] args) {
-        String name = arg(args, 2);
-        boolean save = true;
+        String name = arg(args, 2);        boolean save = true;
         for (String value : args) {
             if (value.equalsIgnoreCase("--save")) {
                 save = true;
@@ -296,6 +306,72 @@ public final class AICommand implements CommandExecutor, TabCompleter {
         manager().save(body.name());
         Text.send(sender, "§a已把 §f" + body.name() + " §a的锚点设为当前位置："
                 + round(location.getX()) + " " + round(location.getY()) + " " + round(location.getZ()));
+    }
+
+    /**
+     * {@code /ai body set <token> [name]}：给躯壳设独立 token（空 = 清除，回落全局 token）。
+     * <p>不写名字时：操作者只有一具躯壳就用它，否则报用法。</p>
+     */
+    private void setToken(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            Text.send(sender, "§7用法：§f/ai body set <token> [名字]§7（token 写 §fclear§7 表示用回全局 token）");
+            if (sender instanceof Player player) {
+                for (AIBody body : manager().bodies()) {
+                    String token = manager().store().tokenOf(body.name());
+                    Text.send(player, "§7  " + body.name() + "：§f"
+                            + (token.isBlank() ? "（未设置，用全局 agent.token）" : mask(token)));
+                }
+            }
+            return;
+        }
+        String token = args[2];
+        String name;
+        if (args.length >= 4) {
+            name = args[3];
+        } else if (sender instanceof Player player) {
+            String own = player.getName();
+            if (manager().byName(own) != null) {
+                name = own;
+            } else if (manager().bodies().size() == 1) {
+                name = manager().bodies().iterator().next().name();
+            } else {
+                Text.send(sender, "§c请指定躯壳名字：§f/ai body set <token> <名字>");
+                return;
+            }
+        } else {
+            Text.send(sender, "§c请指定躯壳名字：§f/ai body set <token> <名字>");
+            return;
+        }
+        boolean clear = token.equalsIgnoreCase("clear") || token.equalsIgnoreCase("none")
+                || token.equalsIgnoreCase("default");
+        if (!clear && token.length() < 6) {
+            Text.send(sender, "§ctoken 至少 6 个字符（写 §fclear§c 表示清除）。");
+            return;
+        }
+        if (!manager().setToken(name, clear ? "" : token)) {
+            Text.send(sender, "§c没有这个躯壳：§f" + name);
+            return;
+        }
+        if (clear) {
+            Text.send(sender, "§a已清除 §f" + name + "§a 的专属 token，之后用全局 §fagent.token§a 连接。");
+        } else {
+            Text.send(sender, "§a已设置 §f" + name + "§a 的专属 token：§f" + mask(token));
+            Text.send(sender, "§7外部 AI 用这个 token §fauth§7 后就直接绑定 §f" + name + "§7（不必再 attach）。");
+        }
+    }
+
+    private static String mask(String token) {
+        if (token == null || token.length() <= 8) {
+            return "****";
+        }
+        return token.substring(0, 4) + "****" + token.substring(token.length() - 4);
+    }
+
+    /** {@code /ai body revive <name>}：倒地后救起来（物品一件不少）。 */
+    private void reviveBody(CommandSender sender, String[] args) {
+        AIBody body = manager().require(arg(args, 2));
+        manager().revive(body);
+        Text.send(sender, "§a" + body.name() + " 已经站起来了（物品一件没少）。");
     }
 
     private void config(CommandSender sender, String[] args) {

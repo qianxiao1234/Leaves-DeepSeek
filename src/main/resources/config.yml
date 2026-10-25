@@ -4,7 +4,7 @@
 # ============================================================
 
 # 配置版本（插件据此自动迁移旧配置，请勿手动删除）
-config-version: 10
+config-version: 11
 
 deepseek:
   # 服务器全局 API Key。留空表示不提供全局 Key（默认留空，由服主决定是否开放）
@@ -227,9 +227,8 @@ agent:
   token: ""
   # AI 能不能通过 RPC（body.create）自己造躯壳；false 时只有 OP 的 /ai body create 能用
   allow-create: true
-  # AI 能不能通过 RPC（body.delete）删躯壳。默认 false = 谁都不能删；
-  # 改成 true 后也只能删「自己造的」（按 token 指纹判归属，老躯壳一律拒绝）
-  allow-delete: false
+  # AI 能不能通过 RPC（body.delete）删躯壳：own（默认，只能删自己造的）/ all / false
+  allow-delete: own
   # body.create 不指定世界时的落点：空 = 主世界重生点
   create-default-world: ""
   # 出生点抬高多少格（防卡在方块里）
@@ -238,6 +237,10 @@ agent:
   body-name-regex: ""
   # 造/删躯壳是否写审计日志
   audit-create: true
+  # 启动时把 bodies/*/state.yml 里的躯壳自动生成出来（false = 只登记成 offline，等 attach 再上线）
+  auto-load: true
+  # 躯壳死亡是否保留物品（像传统假人一样一件不掉，倒地等 revive）
+  keep-inventory: true
   max-bodies-per-session: 1
   auth-timeout-seconds: 5
   max-frame-bytes: 65536

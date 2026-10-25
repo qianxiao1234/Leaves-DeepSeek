@@ -147,6 +147,8 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
             aiBody.setExecutor(aiCommand);
             aiBody.setTabCompleter(aiCommand);
         }
+        // 先把 bodies/*/ 里已有的躯壳登记进内存（重启不掉线），再按配置决定要不要生成实体
+        bodyManager.restoreAll();
         if (agentConfig.enabled()) {
             try {
                 com.leavesdeepseek.agent.AgentServer server = new com.leavesdeepseek.agent.AgentServer(
@@ -191,6 +193,7 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
      *   <li>v7 -> v8：{@code companion.auto-follow} 旧默认值 true 改为 false（不再默认跟随主人）。</li>
      *   <li>v8 -> v9：新增 {@code agent:} / {@code body:} 两段（AI 躯壳子系统，默认关闭）。</li>
      *   <li>v9 -> v10：新增 {@code agent.allow-create} / {@code allow-delete} 等（AI 自建/自删躯壳）。</li>
+     *   <li>v10 -> v11：新增 {@code agent.auto-load} / {@code keep-inventory}，{@code allow-delete} 改三态。</li>
      * </ul>
      */
     private void migrateConfig() {
@@ -334,7 +337,7 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
         if (version < 10) {
             // V2：AI 自己造/删躯壳的开关与落点配置
             setIfMissing(config, "agent.allow-create", true);
-            setIfMissing(config, "agent.allow-delete", false);
+            setIfMissing(config, "agent.allow-delete", "own");
             setIfMissing(config, "agent.create-default-world", "");
             setIfMissing(config, "agent.create-default-y-offset", 0);
             setIfMissing(config, "agent.body-name-regex", "");
@@ -343,6 +346,24 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
             changed = true;
             getLogger().info("config.yml 已升级到 v10：新增 agent.allow-create / allow-delete 等（AI 自建躯壳）。");
             version = 10;
+        }
+
+        if (version < 11) {
+            // V3：重启自动登记/加载 + 躯壳死亡保留物品
+            setIfMissing(config, "agent.auto-load", true);
+            setIfMissing(config, "agent.keep-inventory", true);
+            // allow-delete 从布尔升级成三态（false → own，用户要「自己的能删」）
+            Object raw = config.get("agent.allow-delete");
+            if (raw instanceof Boolean bool) {
+                config.set("agent.allow-delete", bool ? "all" : "own");
+            } else if (raw == null) {
+                config.set("agent.allow-delete", "own");
+            }
+            config.set("config-version", 11);
+            changed = true;
+            getLogger().info("config.yml 已升级到 v11：新增 agent.auto-load / keep-inventory，"
+                    + "allow-delete 改为 own|all|false（默认 own）。");
+            version = 11;
         }
 
         if (changed) {

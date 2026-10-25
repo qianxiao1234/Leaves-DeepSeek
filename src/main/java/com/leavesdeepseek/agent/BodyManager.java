@@ -51,6 +51,75 @@ public final class BodyManager {
         applyNameRegex(config.bodyNameRegex());
     }
 
+    /**
+     * 启动时扫一遍 {@code bodies/*}{@code /state.yml}，把每具躯壳登记进内存（默认 OFFLINE 占位）。
+     *
+     * <p>之前构造时不扫盘，重启后 {@code body.list} 是空的、{@code attach} 报 no_such_body，
+     * 但存档文件明明还在 → 「躯壳丢了」的错觉（V3 §2 P2）。
+     * {@code body.auto-load: true} 时会顺便把实体生成出来（paused，等 AI 连上）。</p>
+     */
+    public void restoreAll() {
+        List<String> stored = store.listStored();
+        int registered = 0;
+        int spawned = 0;
+        for (String name : stored) {
+            if (bodies.containsKey(name)) {
+                continue;
+            }
+            AIBody body = new AIBody(this, name, null, System.currentTimeMillis());
+            body.ownerKey(store.ownerOf(name));
+            YamlConfiguration yaml = store.read(name);
+            if (yaml != null) {
+                World world = Bukkit.getWorld(yaml.getString("world", ""));
+                if (world != null) {
+                    body.anchor(new Location(world,
+                            yaml.getDouble("anchor.x", yaml.getDouble("x")),
+                            yaml.getDouble("anchor.y", yaml.getDouble("y")),
+                            yaml.getDouble("anchor.z", yaml.getDouble("z"))));
+                }
+            }
+            body.state(AIBody.State.OFFLINE);
+            bodies.put(name, body);
+            registered++;
+            boolean wasDowned = yaml != null && yaml.getBoolean("downed", false);
+            if (wasDowned) {
+                body.dead(true);
+            }
+            if (config.autoLoad()) {
+                try {
+                    bringOnline(body, "auto-load");
+                    if (wasDowned) {
+                        // 重启前是倒地状态：恢复成「倒地」（无敌 + 1 血），等 owner revive
+                        markDownedAfterLoad(body);
+                    }
+                    spawned++;
+                } catch (Throwable throwable) {
+                    plugin.log().warn("躯壳", "自动加载失败（" + name + "）：" + throwable.getMessage());
+                }
+            }
+        }
+        if (registered > 0) {
+            plugin.log().info("躯壳", "启动登记 " + registered + " 具躯壳，其中自动上线 " + spawned
+                    + " 具（body.auto-load=" + config.autoLoad() + "）");
+        }
+    }
+
+    /** 读档时恢复「倒地」外观：无敌 + 低血量，等 revive。 */
+    private void markDownedAfterLoad(AIBody body) {
+        Bot bot = body.bot();
+        if (bot == null || !bot.isValid()) {
+            return;
+        }
+        try {
+            bot.setInvulnerable(true);
+            bot.setHealth(Math.max(0.1, Math.min(1.0, bot.getMaxHealth())));
+            body.dead(true);
+            plugin.log().info("躯壳", "躯壳 " + body.name() + " 恢复为倒地状态（物品已保留，等 revive）");
+        } catch (RuntimeException exception) {
+            plugin.log().warn("躯壳", "恢复倒地状态失败：" + exception.getMessage());
+        }
+    }
+
     public LeavesDeepSeekPlugin plugin() {
         return plugin;
     }
@@ -131,7 +200,7 @@ public final class BodyManager {
                     JsonRpc.object("reason", "bad_name", "name", clean));
         }
         if (bodies.containsKey(clean) || plugin.bots().byName(clean) != null
-                || Bukkit.getPlayerExact(clean) != null) {
+                || Bukkit.getPlayerExact(clean) != null || store.exists(clean)) {
             throw new JsonRpc.RpcException(JsonRpc.BAD_REQUEST, "名字已被占用：" + clean,
                     JsonRpc.object("reason", "name_taken", "name", clean));
         }
@@ -243,7 +312,7 @@ public final class BodyManager {
         Bot bot = body.bot();
         if (bot != null && bot.isValid()) {
             if (save) {
-                store.save(name, bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey());
+                store.save(name, bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey(), body.dead());
             }
             clearInventory(bot);
             bot.remove(false);
@@ -270,14 +339,20 @@ public final class BodyManager {
      * </ul>
      */
     private void checkDeletable(AIBody body, String requesterKey) {
-        if (!config.allowDelete()) {
-            throw new JsonRpc.RpcException(JsonRpc.DENIED, "服务器禁止 AI 删除躯壳（agent.allow-delete: false）",
+        String mode = config.allowDeleteMode();
+        if ("false".equals(mode)) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED,
+                    "服务器禁止 AI 删除躯壳（agent.allow-delete: false）",
                     JsonRpc.object("reason", "delete_disabled", "body", body.name()));
         }
         String owner = body.ownerKey();
         if (owner == null || owner.isBlank()) {
-            throw new JsonRpc.RpcException(JsonRpc.DENIED, "这是老躯壳（没有归属记录），只能由管理员用 /ai body remove 删除",
+            throw new JsonRpc.RpcException(JsonRpc.DENIED,
+                    "这是老躯壳（没有归属记录），只能由管理员用 /ai body remove 删除",
                     JsonRpc.object("reason", "legacy_body", "body", body.name()));
+        }
+        if ("all".equals(mode)) {
+            return;
         }
         if (!owner.equals(requesterKey)) {
             throw new JsonRpc.RpcException(JsonRpc.DENIED, "这不是你造的躯壳",
@@ -290,7 +365,7 @@ public final class BodyManager {
         Bot bot = body.bot();
         body.controller().stopAll(JsonRpc.nameOf(JsonRpc.BODY_OFFLINE));
         if (bot != null && bot.isValid()) {
-            store.save(body.name(), bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey());
+            store.save(body.name(), bot, body.anchor(), body.createdAt(), System.currentTimeMillis(), body.ownerKey(), body.dead());
             clearInventory(bot);
             bot.remove(false);
         }
@@ -338,7 +413,7 @@ public final class BodyManager {
         if (body == null || !body.online()) {
             return false;
         }
-        return store.save(name, body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey());
+        return store.save(name, body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey(), body.dead());
     }
 
     private void clearInventory(Bot bot) {
@@ -381,7 +456,7 @@ public final class BodyManager {
             saveCounter = 0;
             for (AIBody body : bodies()) {
                 if (body.online()) {
-                    store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey());
+                    store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey(), body.dead());
                 }
             }
         }
@@ -422,6 +497,97 @@ public final class BodyManager {
         }
     }
 
+    /** {@code /ai body set <token> [name]}：给躯壳设一个独立 token（空 = 清除）。 */
+    public boolean setToken(String name, String token) {
+        AIBody body = bodies.get(name);
+        if (body == null && !store.exists(name)) {
+            return false;
+        }
+        if (!store.setToken(name, token)) {
+            return false;
+        }
+        // token 换了 = 归属指纹也换，避免旧 token 还能删
+        if (body != null && token != null && !token.isBlank()) {
+            body.ownerKey(fingerprintOf(token.trim()));
+        }
+        if (config.auditCreate()) {
+            auditEvent(name, "body.set-token", JsonRpc.object(
+                    "set", token != null && !token.isBlank(),
+                    "fingerprint", token == null || token.isBlank() ? "" : fingerprintOf(token.trim())));
+        }
+        return true;
+    }
+
+    /**
+     * 按 token 找躯壳（auth 时判断「这是哪具躯壳的专属 token」）。
+     *
+     * @return 躯壳名；不是专属 token 则返回 null
+     */
+    public String bodyOfToken(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        String clean = token.trim();
+        for (AIBody body : bodies()) {
+            String own = store.tokenOf(body.name());
+            if (!own.isBlank() && own.equals(clean)) {
+                return body.name();
+            }
+        }
+        // 内存里没登记但存档里有（例如刚被手动删掉内存记录）
+        for (String name : store.listStored()) {
+            String own = store.tokenOf(name);
+            if (!own.isBlank() && own.equals(clean)) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 复活躯壳：不在线就先上线，然后回满血、传送到 anchor（或原地起来）。
+     */
+    public void revive(AIBody body) {
+        if (body == null) {
+            return;
+        }
+        if (!body.online()) {
+            bringOnline(body, "revive");
+        }
+        Bot bot = body.bot();
+        if (bot == null || !bot.isValid()) {
+            throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "无法生成躯壳实体",
+                    JsonRpc.object("reason", "spawn_failed"));
+        }
+        if (bot.isDead()) {
+            try {
+                bot.spigot().respawn();
+            } catch (Throwable throwable) {
+                plugin.log().warn("躯壳", "respawn 调用失败：" + throwable.getMessage());
+            }
+        }
+        Location anchor = body.anchor();
+        if (anchor != null && anchor.getWorld() != null) {
+            bot.teleport(anchor);
+        }
+        bot.setHealth(bot.getMaxHealth());
+        bot.setFoodLevel(20);
+        bot.setSaturation(20.0f);
+        bot.setFireTicks(0);
+        bot.setFallDistance(0.0f);
+        bot.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
+        body.dead(false);
+        body.guard().resume("revive");
+        store.save(body.name(), bot, anchor, body.createdAt(), System.currentTimeMillis(), body.ownerKey(), false);
+        plugin.log().info("躯壳", "已复活躯壳 " + body.name() + "（物品保留）");
+    }
+
+    /** 供命令/感知用：存档里该躯壳的 token 指纹。 */
+    public String tokenFingerprintOf(String name) {
+        String token = store.tokenOf(name);
+        return token.isBlank() ? "" : fingerprintOf(token);
+    }
+
     public List<String> names() {
         return new ArrayList<>(bodies.keySet());
     }
@@ -448,6 +614,9 @@ public final class BodyManager {
             String owner = body.ownerKey();
             entry.addProperty("owner", owner == null || owner.isBlank() ? "" : owner);
             entry.addProperty("mine", requesterKey != null && !owner.isBlank() && owner.equals(requesterKey));
+            entry.addProperty("downed", body.dead());
+            String token = store.tokenOf(body.name());
+            entry.addProperty("hasToken", !token.isBlank());
             array.add(entry);
         }
         return array;
@@ -457,7 +626,7 @@ public final class BodyManager {
         for (AIBody body : bodies()) {
             body.controller().stopAll("SHUTDOWN");
             if (body.online()) {
-                store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey());
+                store.save(body.name(), body.bot(), body.anchor(), body.createdAt(), body.lastSeen(), body.ownerKey(), body.dead());
             }
         }
         AgentServer current = server;

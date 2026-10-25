@@ -204,18 +204,45 @@ public final class AgentServer extends WebSocketServer {
 
     private void handleAuth(AgentSession session, JsonElement id, JsonObject params) {
         String token = Json.getString(params, "token", "");
-        if (!config.token().equals(token)) {
+        if (token == null || token.isBlank()) {
+            send(session, JsonRpc.error(id, JsonRpc.AUTH_FAILED, null, null));
+            close(session.connection(), CLOSE_UNAUTHORIZED, "token 为空");
+            return;
+        }
+        String clean = token.trim();
+        boolean global = config.token().equals(clean);
+        String boundBody = global ? null : manager.bodyOfToken(clean);
+        if (!global && boundBody == null) {
             send(session, JsonRpc.error(id, JsonRpc.AUTH_FAILED, null, null));
             close(session.connection(), CLOSE_UNAUTHORIZED, "token 错误");
             return;
         }
         session.authenticated(true);
-        session.fingerprint(BodyManager.fingerprintOf(token));
+        session.fingerprint(BodyManager.fingerprintOf(clean));
+        session.boundBody(boundBody);
         JsonObject result = new JsonObject();
         result.addProperty("ok", true);
         result.addProperty("server", "LeavesDeepSeek");
         result.addProperty("version", "1");
+        result.addProperty("scope", boundBody == null ? "global" : "body");
+        if (boundBody != null) {
+            result.addProperty("body", boundBody);
+        }
         send(session, JsonRpc.response(id, result));
+        // 躯壳专属 token：auth 完直接 attach，客户端不用再发一次 body.attach
+        if (boundBody != null) {
+            String target = boundBody;
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                try {
+                    JsonObject attachParams = new JsonObject();
+                    attachParams.addProperty("name", target);
+                    attach(session, attachParams);
+                } catch (JsonRpc.RpcException exception) {
+                    send(session, JsonRpc.notify("ev.state", JsonRpc.object(
+                            "state", "error", "reason", exception.getMessage())));
+                }
+            });
+        }
     }
 
     // ------------------------------------------------------------------ 分发
@@ -286,6 +313,11 @@ public final class AgentServer extends WebSocketServer {
 
     private JsonElement attach(AgentSession session, JsonObject params) {
         String name = Json.getString(params, "name", "");
+        if (session.boundBody() != null && !session.boundBody().equals(name)) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED,
+                    "这个连接只能用躯壳 " + session.boundBody(),
+                    JsonRpc.object("reason", "body_scoped_token", "body", session.boundBody()));
+        }
         AIBody body = manager.byName(name);
         if (body == null) {
             throw new JsonRpc.RpcException(JsonRpc.NOT_FOUND, "没有这个躯壳：" + name,
@@ -326,6 +358,11 @@ public final class AgentServer extends WebSocketServer {
 
     /** {@code body.create}：AI 自己造躯壳（施工清单 §2.1）。 */
     private JsonElement createBody(AgentSession session, JsonObject params) {
+        if (session.boundBody() != null) {
+            throw new JsonRpc.RpcException(JsonRpc.DENIED,
+                    "这个连接用的是躯壳 " + session.boundBody() + " 的专属 token，不能再造新躯壳",
+                    JsonRpc.object("reason", "body_scoped_token", "body", session.boundBody()));
+        }
         if (!config.allowCreate()) {
             throw new JsonRpc.RpcException(JsonRpc.DENIED,
                     "服务器禁止 AI 造躯壳（agent.allow-create: false）",
@@ -413,7 +450,7 @@ public final class AgentServer extends WebSocketServer {
         addHelp(methods, "body.info", "", "完整快照（同 sense.snapshot）");
         addHelp(methods, "body.spawn", "save?", "上线/恢复");
         addHelp(methods, "body.despawn", "save?", "存档并下线");
-        addHelp(methods, "body.respawn", "", "死亡后在 anchor 复活");
+        addHelp(methods, "body.respawn", "", "倒地/死亡后复活（回满血、回 anchor，物品保留）");
         addHelp(methods, "body.anchor", "x,y,z | clear:true", "设置/清除死亡重生点");
         addHelp(methods, "sense.snapshot", "", "全量快照");
         addHelp(methods, "sense.terrain", "", "地形语义（six/landmark/hazard）");
@@ -483,33 +520,13 @@ public final class AgentServer extends WebSocketServer {
     }
 
     private JsonElement respawn(AIBody body) {
+        manager.revive(body);
         Bot bot = body.bot();
-        if (bot == null || !bot.isValid()) {
-            manager.bringOnline(body, "respawn");
-            bot = body.bot();
-        }
-        if (bot == null) {
-            throw new JsonRpc.RpcException(JsonRpc.INTERNAL, "无法生成躯壳实体");
-        }
-        if (bot.isDead()) {
-            try {
-                bot.spigot().respawn();
-            } catch (Throwable throwable) {
-                plugin.log().warn("躯壳", "respawn 调用失败：" + throwable.getMessage());
-            }
-        }
-        Location anchor = body.anchor();
-        if (anchor != null && anchor.getWorld() != null) {
-            bot.teleport(anchor);
-        }
-        bot.setHealth(bot.getMaxHealth());
-        bot.setFoodLevel(20);
-        body.dead(false);
-        body.guard().resume("respawn");
-        if (body.session() != null) {
+        if (body.session() != null && bot != null && bot.isValid()) {
             body.sensors().event("ev.respawn", JsonRpc.object("pos", VecUtil.toArray(bot.getLocation())));
         }
-        return JsonRpc.object("pos", VecUtil.toArray(bot.getLocation()));
+        return JsonRpc.object("pos", bot == null || !bot.isValid()
+                ? new com.google.gson.JsonArray() : VecUtil.toArray(bot.getLocation()));
     }
 
     private JsonElement anchor(AIBody body, JsonObject params) {

@@ -72,6 +72,10 @@ public final class AgentEvents implements Listener {
         if (body == null) {
             return;
         }
+        // 躯壳一律保物品（与 BotListener 里取消 BotDeathEvent 的策略一致）
+        event.setKeepInventory(true);
+        event.setKeepLevel(true);
+        event.setDroppedExp(0);
         body.dead(true);
         body.controller().stopAll("DEATH");
         String cause = "unknown";
@@ -82,8 +86,11 @@ public final class AgentEvents implements Listener {
         Location deathPos = event.getEntity().getLocation().clone();
         body.sensors().event("ev.death", JsonRpc.object("cause", cause,
                 "pos", VecUtil.toArray(deathPos),
-                "dropKept", event.getKeepInventory()));
+                "dropKept", true,
+                "downed", true));
         manager().auditEvent(body.name(), "ev.death", JsonRpc.object("cause", cause));
+        // 死亡瞬间先存档：背包/装备/经验都还在，重启也能恢复
+        manager().save(body.name());
 
         // Leaves 死亡后会移除假人实体：这里等一 tick 再看，必要时把躯壳标成 offline
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
@@ -106,12 +113,7 @@ public final class AgentEvents implements Listener {
                     return;
                 }
                 try {
-                    manager().bringOnline(current, "auto-respawn");
-                    Location anchor = current.anchor();
-                    if (anchor != null && anchor.getWorld() != null && current.bot() != null) {
-                        current.bot().teleport(anchor);
-                    }
-                    current.dead(false);
+                    manager().revive(current);
                 } catch (Throwable throwable) {
                     plugin.log().warn("躯壳", "自动重生失败：" + throwable.getMessage());
                 }

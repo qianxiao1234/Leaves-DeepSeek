@@ -68,9 +68,90 @@ public final class BodyStore {
         return owner == null ? "" : owner.trim();
     }
 
-    public void delete(String name) {        File file = fileOf(name);
+    /**
+     * 列出所有有存档的躯壳名（启动时登记用）。
+     */
+    public List<String> listStored() {
+        List<String> names = new ArrayList<>();
+        if (!root.isDirectory()) {
+            return names;
+        }
+        File[] dirs = root.listFiles(File::isDirectory);
+        if (dirs == null) {
+            return names;
+        }
+        for (File dir : dirs) {
+            if (new File(dir, "state.yml").isFile()) {
+                names.add(dir.getName());
+            }
+        }
+        return names;
+    }
+
+    /** 躯壳自己的目录（bodies/&lt;name&gt;/），像 players/&lt;uuid&gt;/ 一样。 */
+    public File directoryOf(String name) {
+        return new File(root, name);
+    }
+
+    private File tokenFileOf(String name) {
+        return new File(directoryOf(name), "token.txt");
+    }
+
+    /**
+     * 该躯壳的自定义 token；没有则返回空串（表示只能用全局 agent.token）。
+     */
+    public String tokenOf(String name) {
+        File file = tokenFileOf(name);
+        if (!file.isFile()) {
+            return "";
+        }
+        try {
+            String text = java.nio.file.Files.readString(file.toPath(),
+                    java.nio.charset.StandardCharsets.UTF_8).trim();
+            return text;
+        } catch (IOException exception) {
+            plugin.getLogger().warning("读取躯壳 token 失败（" + name + "）：" + exception.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * 写该躯壳的自定义 token；传空串 = 删除（回落到全局 token）。
+     *
+     * @return true 表示已写入/删除
+     */
+    public boolean setToken(String name, String token) {
+        File dir = directoryOf(name);
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            plugin.getLogger().warning("创建躯壳目录失败：" + dir.getAbsolutePath());
+            return false;
+        }
+        File file = tokenFileOf(name);
+        try {
+            if (token == null || token.isBlank()) {
+                if (file.isFile() && !file.delete()) {
+                    return false;
+                }
+                return true;
+            }
+            java.nio.file.Files.writeString(file.toPath(), token.trim() + System.lineSeparator(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            return true;
+        } catch (IOException exception) {
+            plugin.getLogger().warning("写入躯壳 token 失败（" + name + "）：" + exception.getMessage());
+            return false;
+        }
+    }
+
+    public void delete(String name) {
+        File file = fileOf(name);
         if (file.isFile() && !file.delete()) {
             plugin.getLogger().warning("删除躯壳存档失败：" + file.getAbsolutePath());
+        }
+        // token.txt 也一起删（dir 非空就删不掉）
+        File tokenFile = tokenFileOf(name);
+        if (tokenFile.isFile() && !tokenFile.delete()) {
+            plugin.getLogger().warning("删除躯壳 token 失败：" + tokenFile.getAbsolutePath());
         }
         File dir = new File(root, name);
         String[] rest = dir.list();
@@ -96,6 +177,18 @@ public final class BodyStore {
      */
     public boolean save(String name, Bot bot, Location anchor, long createdAt, long lastSeen,
                         String owner) {
+        return save(name, bot, anchor, createdAt, lastSeen, owner, false);
+    }
+
+    /**
+     * 把当前实体写进存档。{@code bot} 必须在线。
+     *
+     * @param owner  躯壳归属指纹（token 的 sha256 前 16 位）；null 表示沿用旧值
+     * @param downed 是否处于「倒地」状态（重启后要恢复成倒地，等 revive）
+     * @return true 表示写入成功
+     */
+    public boolean save(String name, Bot bot, Location anchor, long createdAt, long lastSeen,
+                        String owner, boolean downed) {
         if (bot == null || !bot.isValid()) {
             return false;
         }
@@ -155,6 +248,7 @@ public final class BodyStore {
         yaml.set("effects", effects);
         yaml.set("createdAt", createdAt <= 0 ? System.currentTimeMillis() : createdAt);
         yaml.set("lastSeen", lastSeen <= 0 ? System.currentTimeMillis() : lastSeen);
+        yaml.set("downed", downed);
 
         File file = fileOf(name);
         File dir = file.getParentFile();

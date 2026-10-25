@@ -39,11 +39,18 @@ public final class BotListener implements Listener {
      */
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerDeath(PlayerDeathEvent event) {
-        if (!(event.getEntity() instanceof Bot)) {
+        if (!(event.getEntity() instanceof Bot bot)) {
             return;
         }
-        if (plugin.bodyManager() != null && plugin.bodyManager().isBody((Bot) event.getEntity())) {
-            // AI 躯壳走真实死亡规则（由 AgentEvents 推 ev.death，AI 自己决定 respawn）
+        if (plugin.bodyManager() != null && plugin.bodyManager().isBody(bot)) {
+            // 躯壳：即使真的走到了 PlayerDeathEvent（服务端版本差异），也不许掉东西
+            event.setKeepInventory(true);
+            event.setKeepLevel(true);
+            event.setDroppedExp(0);
+            List<ItemStack> drops = event.getDrops();
+            if (drops != null) {
+                drops.clear();
+            }
             return;
         }
         List<ItemStack> drops = event.getDrops();
@@ -57,7 +64,8 @@ public final class BotListener implements Listener {
 
     /**
      * 假人死亡：不改掉落物，而是**取消死亡**，进入「倒地」状态并保留全部物品。
-     * <p>Leaves 的 {@code ServerBot.die} 会先发这个事件，取消后只会把血量设成 0.1 并返回，
+     *
+     * <p>Leaves 的 {@code ServerBot.die} 会先发 {@code BotDeathEvent}，取消后只会把血量设成 0.1 并返回，
      * 不会调用 {@code removeBot(..., save=false)}（那一步会 {@code dropAll} 把装备丢在地上）。
      * 主人说「复活」或执行 {@code /buddy bot revive} 后恢复正常。</p>
      */
@@ -67,8 +75,17 @@ public final class BotListener implements Listener {
         if (bot == null) {
             return;
         }
-        if (plugin.bodyManager() != null && plugin.bodyManager().isBody(bot)) {
-            // AI 躯壳不拦死亡：真实死亡 + 掉落按服务器规则，AI 收到 ev.death 后自己决定 respawn
+        com.leavesdeepseek.agent.AIBody body = plugin.bodyManager() == null
+                ? null : plugin.bodyManager().byBot(bot);
+        if (body != null) {
+            // AI 躯壳：像传统假人一样「拦下死亡」—— 保留全部物品、等 revive，
+            // 否则 Leaves 会 removeBot(save=false) → dropAll(true) 把装备撒一地（用户要求）。
+            event.setCancelled(true);
+            event.setSendDeathMessage(false);
+            String rawCause = bot.getLastDamageCause() == null ? "unknown"
+                    : bot.getLastDamageCause().getCause().name().toLowerCase(java.util.Locale.ROOT);
+            final String cause = rawCause;
+            plugin.getServer().getScheduler().runTask(plugin, () -> enterBodyDowned(body, cause));
             return;
         }
         event.setCancelled(true);
@@ -87,6 +104,36 @@ public final class BotListener implements Listener {
             plugin.log().info("伙伴", "假人 " + BotNames.rawName(bot)
                     + " 受致命伤，已拦截死亡并保留全部物品（等待复活）");
         }
+    }
+
+    /**
+     * 躯壳倒地：清任务、无敌、血量留一点、推 {@code ev.death}，等 {@code body.respawn} / {@code /ai body revive}。
+     */
+    private void enterBodyDowned(com.leavesdeepseek.agent.AIBody body, String cause) {
+        Bot bot = body.bot();
+        if (bot == null || !bot.isValid()) {
+            return;
+        }
+        body.dead(true);
+        body.controller().stopAll("DEATH");
+        try {
+            bot.setInvulnerable(true);
+            bot.setFireTicks(0);
+            bot.setFallDistance(0.0f);
+            bot.setHealth(Math.max(0.1, Math.min(1.0, bot.getMaxHealth())));
+        } catch (RuntimeException exception) {
+            plugin.getLogger().warning("躯壳倒地处理失败：" + exception.getMessage());
+        }
+        // 立刻存档：万一随后被外力移除，背包/装备也还在
+        if (plugin.bodyManager() != null) {
+            plugin.bodyManager().save(body.name());
+        }
+        body.sensors().event("ev.death", com.leavesdeepseek.agent.JsonRpc.object(
+                "cause", cause,
+                "pos", com.leavesdeepseek.agent.util.VecUtil.toArray(bot.getLocation()),
+                "dropKept", true,
+                "downed", true));
+        plugin.log().info("躯壳", "躯壳 " + body.name() + " 倒下了（物品已保留），等 revive | cause=" + cause);
     }
 
     /**

@@ -531,6 +531,11 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 | 没连上时它会自己慢慢走开 | 粘性跟随在旁观态被看门狗接回去 | 已改：躯壳取消/暂停任务时清掉跟随状态 |
 | 说话很笨，只会回「听见了」 | 对话侧还在做 | 计划中 |
 
+### 如果它倒下了
+
+它**死了不会掉装备**（和传统假人一样），只是「倒地」：躺在地上、无敌、什么也不做。
+喊管理员执行 `/ai body revive <名字>` 就能救起来，背包一件不少。重启服务器也不会丢东西。
+
 ## AI 躯壳（外部机器人接管）
 
 除了「有自己 AI 的伙伴假人」，插件还能造**躯壳**：一具完全交给外部机器人控制的生存玩家。
@@ -544,7 +549,9 @@ agent:
   port: 8123
   token: ""           # 留空 = 默认 "leavesdeepseek"（插件名小写）；对外开放前请改成随机串
   allow-create: true  # AI 能不能通过 body.create 自己造躯壳
-  allow-delete: false # AI 能不能删躯壳（只能删自己造的；默认关）
+  allow-delete: own   # AI 能不能删躯壳：own（只能删自己造的，默认）/ all / false
+  auto-load: true     # 重启后自动把 bodies/*/ 里的躯壳生成出来
+  keep-inventory: true # 躯壳死亡保留全部物品（倒地等 revive）
 ```
 
 ```text
@@ -557,6 +564,8 @@ agent:
 /ai body take Whalien                    # 踢掉当前控制会话
 /ai body move Whalien 120 70 -300        # 卡地形救场
 /ai body anchor Whalien set|clear        # 死亡重生点
+/ai body set <token> Whalien             # 给这具躯壳设专属 token
+/ai body revive Whalien                  # 倒地后救起来（物品一件不少）
 /ai body config Whalien allow-pvp true   # 单躯壳覆盖配置
 ```
 
@@ -591,7 +600,30 @@ ws://127.0.0.1:8123/agent
   （`plugins/LeavesDeepSeek/bodies/audit-YYYY-MM-DD.jsonl`）。
 
 > 完整协议（所有字段、错误码 `-32001…-32021`、验收清单）见仓库根目录的 [`ai_body_SPEC.md`](ai_body_SPEC.md)。
-> 躯壳的存档在 `plugins/LeavesDeepSeek/bodies/<名字>/state.yml`，与传统假人的 `players/<uuid>/` 完全分开。
+> 躯壳的存档在 `plugins/LeavesDeepSeek/bodies/<名字>/`，与传统假人的 `players/<uuid>/` 完全分开。
+
+### 躯壳的目录与专属 token
+
+每具躯壳一个文件夹，**服务器重启会自动加载（连同背包装备）**：
+
+```
+plugins/LeavesDeepSeek/bodies/
+└── Whalien/
+    ├── state.yml    # 坐标/血量/饥饿/经验/背包/盔甲/副手/效果/锚点/owner/是否倒地
+    └── token.txt    # 这具躯壳的专属 token（没有 = 用全局 agent.token）
+```
+
+```text
+/ai body set <token> [名字]     # 给躯壳设专属 token（写 clear = 清掉，用回全局）
+/ai body set                    # 不填就列出所有躯壳的 token 状态（脱敏）
+/ai body revive <名字>          # 倒地后救起来（物品一件不少）
+```
+
+- 用**专属 token** 连上来的 AI，`auth` 之后会**直接绑定这具躯壳**（不用再发 `body.attach`），
+  并且不能操作别的躯壳、也不能再 `body.create`。
+- 躯壳**死亡不会掉东西**：和传统假人一样「倒地」——保留全部物品、无敌、停掉所有任务，
+  `body.respawn`（或 `/ai body revive`）救起来；`agent.auto-respawn: true` 可自动复活。
+- `agent.auto-load: false` 时只登记成 `offline`（`body.list` 里能看到），等 AI `attach` 再生成实体。
 > 联调资料（客户端、模拟服务端、验收文档）在 [`AI_DOCS/`](AI_DOCS/)：`ai_body_SPEC.md`、`ai_body_DELIVERY.md`、
 > `ai_body_FIX_REQUEST_v1.md`、`ai_body_PLAYER_GUIDE.md`。
 

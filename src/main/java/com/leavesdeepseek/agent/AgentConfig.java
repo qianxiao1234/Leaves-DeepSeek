@@ -39,10 +39,15 @@ public final class AgentConfig {
     private int respawnDelaySeconds;
     private boolean audit = true;
 
+    /** 启动时是否把存档里的躯壳自动生成出来（false = 只登记成 offline，等 attach 再上线）。 */
+    private boolean autoLoad = true;
+    /** 躯壳死亡是否保留物品（true = 像传统假人一样，一件不掉）。 */
+    private boolean keepInventory = true;
+
     /** AI 能不能通过 RPC 造躯壳（false 时只有 /ai body create 可用）。 */
     private boolean allowCreate = true;
-    /** AI 能不能通过 RPC 删躯壳（默认 false：只能删自己造的，见 BodyStore 的 owner）。 */
-    private boolean allowDelete;
+    /** 躯壳能不能通过 RPC 删：own（只删自己造的，默认）/ all / false。 */
+    private String allowDeleteMode = "own";
     /** create 不指定世界时用哪个世界（空 = 主世界）。 */
     private String createDefaultWorld = "";
     /** create 时把出生点抬高的格数（防卡在方块里）。 */
@@ -95,9 +100,11 @@ public final class AgentConfig {
         autoRespawn = config.getBoolean("agent.auto-respawn", false);
         respawnDelaySeconds = clamp(config.getInt("agent.respawn-delay-seconds", 0), 0, 300);
         audit = config.getBoolean("agent.audit", true);
+        autoLoad = config.getBoolean("agent.auto-load", true);
+        keepInventory = config.getBoolean("agent.keep-inventory", true);
 
         allowCreate = config.getBoolean("agent.allow-create", true);
-        allowDelete = config.getBoolean("agent.allow-delete", false);
+        allowDeleteMode = normalizeDeleteMode(config.get("agent.allow-delete"));
         createDefaultWorld = trim(config.getString("agent.create-default-world", ""));
         createDefaultYOffset = clamp(config.getInt("agent.create-default-y-offset", 0), 0, 64);
         bodyNameRegex = trim(config.getString("agent.body-name-regex", ""));
@@ -168,6 +175,22 @@ public final class AgentConfig {
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    /**
+     * {@code allow-delete} 三态：{@code own}（默认，只能删自己造的）/ {@code all} / {@code false}。
+     * 兼容旧写法：true → all，false → false。
+     */
+    private static String normalizeDeleteMode(Object raw) {
+        if (raw == null) {
+            return "own";
+        }
+        String value = String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "all", "true", "yes", "on" -> "all";
+            case "false", "no", "off", "none" -> "false";
+            default -> "own";
+        };
     }
 
     private static String trim(String raw) {
@@ -242,12 +265,26 @@ public final class AgentConfig {
         return audit;
     }
 
+    public boolean autoLoad() {
+        return autoLoad;
+    }
+
+    public boolean keepInventory() {
+        return keepInventory;
+    }
+
     public boolean allowCreate() {
         return allowCreate;
     }
 
+    /** {@code own} / {@code all} / {@code false}。 */
+    public String allowDeleteMode() {
+        return allowDeleteMode;
+    }
+
+    /** 兼容旧调用：只要不是 false 就允许（具体能不能删由 BodyManager 判归属）。 */
     public boolean allowDelete() {
-        return allowDelete;
+        return !"false".equals(allowDeleteMode);
     }
 
     public String createDefaultWorld() {
