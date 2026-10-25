@@ -61,6 +61,14 @@ public final class DeepSeekClient {
      * @param requestId 日志标记
      */
     public CompletableFuture<JsonObject> chat(JsonArray messages, JsonArray tools, ApiConfig api, String requestId) {
+        return chat(messages, tools, api, requestId, settings.maxTokens());
+    }
+
+    /**
+     * 同上，但可以单独指定 max_tokens（推理型模型把 token 花在 reasoning 上时，用于自动加大上限重试）。
+     */
+    public CompletableFuture<JsonObject> chat(JsonArray messages, JsonArray tools, ApiConfig api,
+                                              String requestId, int maxTokens) {
         if (api == null || !api.usable()) {
             return failed("没有可用的 API 配置（缺少 api key / model / base-url）");
         }
@@ -72,13 +80,58 @@ public final class DeepSeekClient {
         body.addProperty("model", api.model());
         body.add("messages", messages);
         body.addProperty("temperature", settings.temperature());
-        body.addProperty("max_tokens", settings.maxTokens());
+        body.addProperty("max_tokens", Math.max(16, maxTokens));
         body.addProperty("stream", false);
         if (tools != null && !tools.isEmpty()) {
             body.add("tools", tools);
             body.addProperty("tool_choice", "auto");
         }
-        return send(body, api, requestId, 0);
+        return chatWithToolFallback(body, api, requestId, tools != null && !tools.isEmpty());
+    }
+
+    /**
+     * 兼容不支持 Function Calling 的模型（常见于本地部署的 OpenAI 兼容服务）：
+     * 如果带 tools 的请求被判定为「不支持工具」，就丢掉 tools 重发一次。
+     * 提示词里已经包含了工具手册，AgentService 也能解析正文里的 JSON 工具调用。
+     */
+    private CompletableFuture<JsonObject> chatWithToolFallback(JsonObject body, ApiConfig api,
+                                                               String requestId, boolean hasTools) {
+        CompletableFuture<JsonObject> first = send(body, api, requestId, 0);
+        if (!hasTools) {
+            return first;
+        }
+        return first.handle((json, error) -> {
+            if (error == null) {
+                return CompletableFuture.completedFuture(json);
+            }
+            Throwable cause = unwrap(error);
+            if (!(cause instanceof ToolUnsupportedException)) {
+                return CompletableFuture.<JsonObject>failedFuture(
+                        error instanceof CompletionException ? error : new CompletionException(error));
+            }
+            JsonObject fallback = body.deepCopy();
+            fallback.remove("tools");
+            fallback.remove("tool_choice");
+            plugin.log().warn("DeepSeek", "模型明确拒绝 tools，改用「正文 JSON 工具调用」模式重试"
+                    + " | requestId=" + requestId);
+            return send(fallback, api, requestId, 0);
+        }).thenCompose(future -> future);
+    }
+
+    /**
+     * 上游是否在明确拒绝工具参数（而不是普通的 400/404）。
+     * <p>LM Studio 的 {@code {"error":"terminated"}}、{@code No engine protocol runtime...}
+     * 这类上游错误不能触发降级重试。</p>
+     */
+    private static boolean looksLikeToolRejection(int status, String body) {
+        if (status != 400 && status != 422 && status != 404) {
+            return false;
+        }
+        String lower = body == null ? "" : body.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("\"tool") || lower.contains("tool_choice")
+                || lower.contains("function_call") || lower.contains("function calling")
+                || lower.contains("function is not supported") || lower.contains("functions are not supported")
+                || lower.contains("unsupported function") || lower.contains("does not support tools");
     }
 
     /**
@@ -177,11 +230,12 @@ public final class DeepSeekClient {
                     }
                     plugin.log().info("DeepSeek", "HTTP " + response.statusCode() + " | " + elapsedMs
                             + "ms | " + endpoint + " | requestId=" + requestId);
-                    return handleResponse(response, requestId, endpoint);
+                    return handleResponse(response, requestId, endpoint, body.has("tools"));
                 });
     }
 
-    private JsonObject handleResponse(HttpResponse<String> response, String requestId, String endpoint) {
+    private JsonObject handleResponse(HttpResponse<String> response, String requestId, String endpoint,
+                                      boolean toolsRequested) {
         int status = response.statusCode();
         String text = response.body() == null ? "" : response.body();
         plugin.log().payload("DeepSeek", "响应体 status=" + status + " requestId=" + requestId, text);
@@ -190,6 +244,10 @@ public final class DeepSeekClient {
             String message = describeStatus(status, text, endpoint);
             record(message);
             plugin.log().error("DeepSeek", "HTTP " + status + " | " + message + " | requestId=" + requestId);
+            if (toolsRequested && looksLikeToolRejection(status, text)) {
+                // 只有上游明确提到 tools/function 才走「去掉工具重试」，避免把网络/上游错误误判
+                throw new CompletionException(new ToolUnsupportedException(message));
+            }
             throw new CompletionException(new DeepSeekException(message));
         }
 
@@ -245,7 +303,7 @@ public final class DeepSeekClient {
         String detail = extractApiMessage(body);
         String hint = switch (status) {
             case 400 -> "请求被拒绝：参数不合法（常见原因是该模型不支持 Function Calling，可改用 deepseek-chat）";
-            case 401 -> "API Key 无效或已失效，请重新执行 /buddy set <apikey>";
+            case 401 -> "API Key 无效或已失效，请重新执行 /buddy ai set <apikey>";
             case 402 -> "账户余额不足，请到 DeepSeek 开放平台充值";
             case 403 -> "该 Key 没有访问这个模型的权限，请检查 Key 与 model";
             case 404 -> "接口或模型不存在，请检查 base-url（默认 https://api.deepseek.com）和 model";

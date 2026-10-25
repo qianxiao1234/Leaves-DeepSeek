@@ -38,6 +38,17 @@ public final class BotService {
     private final Map<UUID, UUID> botOwners = new ConcurrentHashMap<>();
     /** 假人名 -> 主人 UUID */
     private final Map<String, UUID> nameOwners = new ConcurrentHashMap<>();
+    /** 倒地状态（死亡被拦截后等待复活）：假人 UUID -> 状态 */
+    private final Map<UUID, DownedState> downed = new ConcurrentHashMap<>();
+
+    /**
+     * 倒地状态：假人死亡被拦下、保留全部物品，等主人复活。
+     *
+     * @param since        倒地时间戳
+     * @param wasFollowing 倒地前是否正在跟随（复活后自动恢复）
+     */
+    public record DownedState(long since, boolean wasFollowing) {
+    }
 
     public BotService(JavaPlugin plugin, PluginSettings settings) {
         this.plugin = plugin;
@@ -210,6 +221,7 @@ public final class BotService {
         if (bot == null) {
             return;
         }
+        downed.remove(bot.getUniqueId());
         UUID ownerId = botOwners.remove(bot.getUniqueId());
         if (ownerId == null) {
             ownerId = nameOwners.remove(BotNames.rawName(bot));
@@ -379,5 +391,33 @@ public final class BotService {
 
     public int countOf(Player owner) {
         return botsOf(owner).size();
+    }
+
+    // ------------------------------------------------------------------
+    // 倒地 / 复活
+    // ------------------------------------------------------------------
+
+    /**
+     * 标记假人倒地：保留全部物品，等待主人用「复活」指令救起。
+     */
+    public void markDowned(Bot bot, boolean wasFollowing) {
+        if (bot == null) {
+            return;
+        }
+        downed.put(bot.getUniqueId(), new DownedState(System.currentTimeMillis(), wasFollowing));
+    }
+
+    public boolean isDowned(Bot bot) {
+        return bot != null && downed.containsKey(bot.getUniqueId());
+    }
+
+    public DownedState downedState(Bot bot) {
+        return bot == null ? null : downed.get(bot.getUniqueId());
+    }
+
+    public void clearDowned(Bot bot) {
+        if (bot != null) {
+            downed.remove(bot.getUniqueId());
+        }
     }
 }

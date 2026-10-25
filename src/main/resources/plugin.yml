@@ -13,6 +13,11 @@ commands:
     usage: /buddy help
     aliases: [ buddyai, companion ]
     permission: leavesdeepseek.use
+  ai:
+    description: AI 躯壳（外部机器人接管）管理命令
+    usage: /ai body <create|list|info|remove|save|load|take|release|move|anchor|config|reload>
+    aliases: [ aibody ]
+    permission: leavesdeepseek.ai.admin
 
 permissions:
   leavesdeepseek.use:
@@ -23,4 +28,10 @@ permissions:
     default: true
   leavesdeepseek.admin:
     description: 允许重载配置与查看调试信息
+    default: op
+  leavesdeepseek.ai.admin:
+    description: 允许管理 AI 躯壳（创建/移除/接管）
+    default: op
+  leavesdeepseek.ai.body.create:
+    description: 允许创建 AI 躯壳
     default: op

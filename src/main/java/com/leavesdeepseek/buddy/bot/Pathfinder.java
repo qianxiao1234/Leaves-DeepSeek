@@ -30,6 +30,10 @@ public final class Pathfinder {
     /** 斜向：两个正交方向都通时才允许，避免卡在墙角；代价按 √2 计算 */
     private static final int[][] DIAGONAL = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
     private static final double DIAGONAL_COST = 1.414;
+    /** 涉水的额外代价：有干路就走干路，没有才游泳（跟随主人过河仍然可以走） */
+    private static final double WATER_FEET_COST = 2.0;
+    private static final double WATER_HEAD_COST = 1.5;
+    private static final double DEEP_WATER_COST = 1.5;
 
     private Pathfinder() {
     }
@@ -131,12 +135,14 @@ public final class Pathfinder {
 
             // 上台阶：前方高一格，且上方有空间
             if (clearance(cache, node.x(), node.y(), node.z()) && walkable(cache, nx, node.y() + 1, nz)) {
-                edges.add(new Edge(new Node(nx, node.y() + 1, nz), 1.8));
+                edges.add(new Edge(new Node(nx, node.y() + 1, nz),
+                        1.8 + waterCost(cache, nx, node.y() + 1, nz)));
             }
 
             // 平地
             if (walkable(cache, nx, node.y(), nz)) {
-                edges.add(new Edge(new Node(nx, node.y(), nz), 1.0));
+                edges.add(new Edge(new Node(nx, node.y(), nz),
+                        1.0 + waterCost(cache, nx, node.y(), nz)));
             }
 
             // 下落 1~3 格
@@ -149,7 +155,8 @@ public final class Pathfinder {
                     }
                 }
                 if (columnClear && walkable(cache, nx, node.y() - drop, nz)) {
-                    edges.add(new Edge(new Node(nx, node.y() - drop, nz), 1.0 + drop * 0.4));
+                    edges.add(new Edge(new Node(nx, node.y() - drop, nz),
+                            1.0 + drop * 0.4 + waterCost(cache, nx, node.y() - drop, nz)));
                     break;
                 }
             }
@@ -168,10 +175,12 @@ public final class Pathfinder {
                 continue;
             }
             if (walkable(cache, nx, node.y(), nz)) {
-                edges.add(new Edge(new Node(nx, node.y(), nz), DIAGONAL_COST));
+                edges.add(new Edge(new Node(nx, node.y(), nz),
+                        DIAGONAL_COST + waterCost(cache, nx, node.y(), nz)));
             }
             if (clearance(cache, node.x(), node.y(), node.z()) && walkable(cache, nx, node.y() + 1, nz)) {
-                edges.add(new Edge(new Node(nx, node.y() + 1, nz), DIAGONAL_COST * 1.35));
+                edges.add(new Edge(new Node(nx, node.y() + 1, nz),
+                        DIAGONAL_COST * 1.35 + waterCost(cache, nx, node.y() + 1, nz)));
             }
         }
         return edges;
@@ -268,6 +277,24 @@ public final class Pathfinder {
             return true;
         }
         return !material.isSolid();
+    }
+
+    /**
+     * 涉水额外代价：能绕开就绕开，绕不开才游过去（跟随主人过河时仍然可以走）。
+     */
+    private static double waterCost(BlockCache cache, int x, int y, int z) {
+        if (cache.at(x, y, z) != Material.WATER) {
+            return 0.0;
+        }
+        double cost = WATER_FEET_COST;
+        if (cache.at(x, y + 1, z) == Material.WATER) {
+            // 水没过头顶：游泳更慢、还会消耗氧气
+            cost += WATER_HEAD_COST;
+        }
+        if (cache.at(x, y - 1, z) == Material.WATER) {
+            cost += DEEP_WATER_COST;
+        }
+        return cost;
     }
 
     private static double heuristic(Node a, Node b) {

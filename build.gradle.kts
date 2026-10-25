@@ -16,6 +16,8 @@ dependencies {
     // leaves-api 已内置 Bukkit / Paper API，无需再单独声明 paper-api
     // 编译目标对齐 Leaves 最新正式版 1.21.8；如服务端为其他 1.21.x 版本，改成对应版本即可
     compileOnly("org.leavesmc.leaves:leaves-api:1.21.8-R0.1-SNAPSHOT")
+    // AI 躯壳的 WebSocket 服务端（规格要求 shade 进 jar；不用 Netty）
+    implementation("org.java-websocket:Java-WebSocket:1.5.6")
 }
 
 java {
@@ -40,6 +42,15 @@ tasks.processResources {
 
 tasks.jar {
     archiveBaseName.set("LeavesDeepSeek")
+    // 只把 Java-WebSocket 打进插件 jar（避免把服务端 API / slf4j 一起塞进去）
+    from(configurations.runtimeClasspath.get()
+        .filter { it.name.contains("Java-WebSocket") }
+        .map { zipTree(it) })
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude(
+        "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA",
+        "META-INF/MANIFEST.MF", "module-info.class"
+    )
 }
 
 tasks.register<Copy>("deployPlugin") {

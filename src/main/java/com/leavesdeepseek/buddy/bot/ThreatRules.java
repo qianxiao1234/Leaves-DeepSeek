@@ -20,7 +20,7 @@ public final class ThreatRules {
     public static final double HEALTH_EAT_RATIO = 0.60;
     /** 战斗前饥饿值低于该值先吃 */
     public static final int HUNGER_EAT_LEVEL = 6;
-    /** 被这么多只敌对生物围攻时撤退 */
+    /** 被这么多只敌对生物围攻时撤退（当前策略：不按数量撤，只看血量，保留常量备用） */
     public static final int GROUP_RETREAT_COUNT = 4;
     /** 统计围攻数量的半径 */
     public static final double GROUP_RADIUS = 8.0;
@@ -60,13 +60,15 @@ public final class ThreatRules {
     }
 
     /**
-     * 远程生物：必须拉近距离（目前策略与近战一致，集中在这里方便以后扩展）。
+     * 远程 / 会击退的生物：打它们要用「跑打」（冲上去砍一刀、立刻退半步再冲），
+     * 站着不动会被放风筝、还会被箭的击退顶退。
      */
     public static boolean isRanged(EntityType type) {
         return type == EntityType.SKELETON
                 || type == EntityType.STRAY
                 || type == EntityType.BOGGED
                 || type == EntityType.PILLAGER
+                || type == EntityType.BLAZE
                 || type == EntityType.WITCH;
     }
 }

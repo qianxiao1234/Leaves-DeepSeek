@@ -1,5 +1,6 @@
 package com.leavesdeepseek.buddy.bot;
 
+import com.leavesdeepseek.buddy.LeavesDeepSeekPlugin;
 import com.leavesdeepseek.buddy.config.PluginSettings;
 import com.leavesdeepseek.buddy.util.Json;
 import com.leavesdeepseek.buddy.util.Tasks;
@@ -20,13 +21,13 @@ import org.bukkit.entity.Tameable;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
-import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.BoundingBox;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
 import org.leavesmc.leaves.entity.bot.Bot;
 import org.leavesmc.leaves.entity.bot.action.AttackAction;
+import org.leavesmc.leaves.entity.bot.action.BotAction;
 import org.leavesmc.leaves.entity.bot.action.BreakBlockAction;
 import org.leavesmc.leaves.entity.bot.action.JumpAction;
 import org.leavesmc.leaves.entity.bot.action.MoveAction;
@@ -58,20 +59,25 @@ public final class BotActions {
     private static final int SAFETY_INTERVAL_TICKS = 4;
     /** 连续追不到目标的 tick 上限。15 格开外疾跑追过去也要时间，给足 8 秒 */
     private static final int MAX_CHASE_TICKS = 160;
+    /** 打远程怪（骷髅等）时：砍完一刀后撤的 tick 数与距离（跑打） */
+    private static final int RECOIL_TICKS = 8;
+    private static final double RECOIL_DISTANCE = 3.5;
     private static final long COMBAT_TIMEOUT_MS = 30_000L;
     private static final Random RANDOM = new Random();
     private static final List<BlockFace> FACES = List.of(
             BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST, BlockFace.UP, BlockFace.DOWN);
 
-    private final JavaPlugin plugin;
+    private final LeavesDeepSeekPlugin plugin;
     private final PluginSettings settings;
     private final BotService bots;
     private final BotNavigator navigator;
     private final Map<UUID, Fight> fights = new HashMap<>();
     /** 动作世代：主人每次下达新指令 +1，旧的异步流程看到世代变化会自行退出 */
     private final Map<UUID, Integer> epochs = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 正在进食的假人：同一时间只允许一条进食流程，避免手动/自动互相打断 */
+    private final Set<UUID> eatingBots = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    public BotActions(JavaPlugin plugin, PluginSettings settings, BotService bots, BotNavigator navigator) {
+    public BotActions(LeavesDeepSeekPlugin plugin, PluginSettings settings, BotService bots, BotNavigator navigator) {
         this.plugin = plugin;
         this.settings = settings;
         this.bots = bots;
@@ -116,6 +122,33 @@ public final class BotActions {
         navigator.clearFollowLocks(bot);
         navigator.cancel(bot);
         bots.stopAllActions(bot);
+    }
+
+    /**
+     * 主人下达「跟着我」但假人正在强制进食：只收掉 AI 的活和战斗，
+     * **不碰正在进行的进食动作**，让那口饭先吃完。
+     */
+    public void yieldToFollow(Bot bot, String reason) {
+        if (bot == null) {
+            return;
+        }
+        epochs.merge(bot.getUniqueId(), 1, Integer::sum);
+        stopFight(bot, reason);
+        navigator.cancel(bot);
+        try {
+            for (int index = bot.getActionSize() - 1; index >= 0; index--) {
+                BotAction<?> action = bot.getAction(index);
+                // 吃东西用的是 UseItemAction；保留它，其余动作（挖掘/放置等）立刻收掉
+                if (action instanceof UseItemAction
+                        || action instanceof UseItemOffhandAction
+                        || action instanceof UseItemOnAction) {
+                    continue;
+                }
+                bot.stopAction(index);
+            }
+        } catch (RuntimeException ignored) {
+            // 假人可能已被移除
+        }
     }
 
     /**
@@ -294,6 +327,9 @@ public final class BotActions {
     }
 
     public CompletableFuture<String> useItem(Bot bot, boolean offhand, int useTicks) {
+        if (bot != null && isEating(bot)) {
+            return done(Json.error("我正在吃东西，等吃完再用物品"));
+        }
         ItemStack hand = offhand
                 ? bot.getInventory().getItemInOffHand()
                 : bot.getInventory().getItemInMainHand();
@@ -333,6 +369,21 @@ public final class BotActions {
      * @param allowValuable 是否允许吃贵重食物（需要主人同意）
      */
     public CompletableFuture<String> eat(Bot bot, Material requested, boolean allowValuable) {
+        return eat(bot, requested, allowValuable, false);
+    }
+
+    /**
+     * @param protectFromEpoch true 表示这次进食是血量急救：主人说「跟着我」只暂停跟随，
+     *                         不允许把进食本身打断（跟随会在吃完后自动接上）
+     */
+    public CompletableFuture<String> eat(Bot bot, Material requested, boolean allowValuable,
+                                         boolean protectFromEpoch) {
+        if (bot == null || !bot.isValid()) {
+            return done(Json.error("假人已离线"));
+        }
+        if (bot.isDead() || bot.isSleeping() || bots.isDowned(bot)) {
+            return done(Json.error("现在不能吃东西（倒地/睡觉/已离线）"));
+        }
         Material material = requested;
         if (material == null) {
             material = FoodRules.pickBest(bot.getInventory(), false);
@@ -356,28 +407,63 @@ public final class BotActions {
         if (bot.getFoodLevel() >= 20 && !FoodRules.isValuable(food)) {
             return done(Json.error("我现在不饿"));
         }
-        if (ensureInHand(bot, food) < 0) {
+        UUID botId = bot.getUniqueId();
+        if (!eatingBots.add(botId)) {
+            return done(Json.error("我正在吃东西，别急"));
+        }
+        int handSlot;
+        try {
+            handSlot = ensureInHand(bot, food);
+        } catch (RuntimeException exception) {
+            eatingBots.remove(botId);
+            return done(Json.error("切换手持食物失败：" + Json.rootMessage(exception)));
+        }
+        if (handSlot < 0) {
+            eatingBots.remove(botId);
             return done(Json.error("背包里没有 " + food.name()));
         }
 
         int foodBefore = bot.getFoodLevel();
         int countBefore = countItems(bot.getInventory(), food);
-        beginJob(bot);
-
-        UseItemAction action = UseItemAction.create();
-        action.setStartDelayTick(1);
-        action.setDoIntervalTick(1);
-        action.setDoNumber(1);
-        action.setUseTickTimeout(40);
-        bot.addAction(action);
+        final int epoch = epoch(bot);
+        try {
+            beginJob(bot);
+        } catch (RuntimeException exception) {
+            eatingBots.remove(botId);
+            return done(Json.error("准备进食失败：" + Json.rootMessage(exception)));
+        }
+        if (plugin.log() != null) {
+            plugin.log().info("进食", "开始 | 假人=" + BotNames.rawName(bot) + " | 食物=" + food.name()
+                    + " | 血量=" + Math.round(bot.getHealth() * 10) / 10.0
+                    + " | 饥饿=" + foodBefore + " | 数量=" + countBefore);
+        }
+        try {
+            UseItemAction action = UseItemAction.create();
+            action.setStartDelayTick(1);
+            action.setDoIntervalTick(1);
+            action.setDoNumber(1);
+            action.setUseTickTimeout(40);
+            bot.addAction(action);
+        } catch (RuntimeException exception) {
+            eatingBots.remove(botId);
+            endJob(bot);
+            plugin.log().warn("进食", "添加使用动作失败：" + Json.rootMessage(exception));
+            return done(Json.error("没法把食物送到嘴边：" + Json.rootMessage(exception)));
+        }
 
         return Tasks.poll(plugin, 100, 2, () -> !bot.isValid()
+                        || (!protectFromEpoch && !isCurrent(bot, epoch))
                         || bot.getFoodLevel() > foodBefore
                         || countItems(bot.getInventory(), food) < countBefore)
                 .thenApply(finished -> {
                     bots.stopActions(bot, UseItemAction.class);
                     if (!bot.isValid()) {
                         return Json.error("假人已离线");
+                    }
+                    if (!protectFromEpoch && !isCurrent(bot, epoch)) {
+                        // 主人下达了新指令（例如「跟着我」）：立刻收手，不要继续嚼
+                        return Json.obj("ok", false, "interrupted", true,
+                                "error", "吃东西被新指令打断了").toString();
                     }
                     int foodAfter = bot.getFoodLevel();
                     int countAfter = countItems(bot.getInventory(), food);
@@ -391,7 +477,19 @@ public final class BotActions {
                             "food_after", foodAfter,
                             "remaining", countAfter);
                 })
-                .whenComplete((result, error) -> endJob(bot));
+                .whenComplete((result, error) -> {
+                    eatingBots.remove(botId);
+                    endJob(bot);
+                    if (plugin.log() != null) {
+                        plugin.log().info("进食", "结束 | 假人=" + BotNames.rawName(bot)
+                                + " | 结果=" + Json.truncate(String.valueOf(result), 200));
+                    }
+                });
+    }
+
+    /** 是否正在进食（手动 / 自动 / 急救共用）。 */
+    public boolean isEating(Bot bot) {
+        return bot != null && eatingBots.contains(bot.getUniqueId());
     }
 
     private int countItems(Inventory inventory, Material material) {
@@ -573,6 +671,20 @@ public final class BotActions {
             return;
         }
 
+        // 打远程怪（骷髅/掠夺者…）：跑打 —— 砍完一刀先退半步躲开箭，再冲上去
+        if (ThreatRules.isRanged(focus.getType()) && fight.recoilTicks > 0) {
+            fight.recoilTicks--;
+            aimAt(bot, center(focus));
+            if (!navigator.isNavigating(bot)) {
+                Location back = findSafeSpot(bot, focus, RECOIL_DISTANCE);
+                if (back != null) {
+                    bot.setSprinting(true);
+                    navigator.navigate(bot, back, 0.9, 14);
+                }
+            }
+            return;
+        }
+
         boolean focusInReach = distanceToHitbox(bot, focus) <= ATTACK_REACH;
         LivingEntity victim = pickVictim(bot, focus, focusInReach);
         if (victim == null) {
@@ -595,6 +707,10 @@ public final class BotActions {
         if (fight.nextAttackIn <= 0) {
             swing(bot, victim);
             fight.nextAttackIn = attackCooldownTicks(bot, victim);
+            if (ThreatRules.isRanged(focus.getType())) {
+                // 跑打：这一刀之后主动后撤几 tick，避免贴脸被箭击退、也少挨几下
+                fight.recoilTicks = RECOIL_TICKS;
+            }
         }
     }
 
@@ -610,7 +726,8 @@ public final class BotActions {
         if (ratio < ThreatRules.HEALTH_RETREAT_RATIO) {
             // 紧急进食：附魔金苹果最优先，其次按饱食度从高到低选
             Material food = FoodRules.pickEmergency(bot.getInventory(), bot.getFoodLevel() >= 20);
-            retreatAndEnd(fight, bot, focus, 8.0, false,
+            // 跑远一点（8 格对僵尸来说等于没跑，跑完立刻又被围住）
+            retreatAndEnd(fight, bot, focus, 16.0, false,
                     food == null ? "血量过低，先撤退" : "血量过低，已撤退并吃 " + food.name());
             if (food != null) {
                 eat(bot, food, true);
@@ -856,6 +973,8 @@ public final class BotActions {
         private int nextAttackIn;
         private int chaseTicks;
         private int eatingTicks;
+        /** 打远程怪时的「后撤」剩余 tick（跑打：砍一刀退半步再冲） */
+        private int recoilTicks;
         private boolean moving;
         private Location navGoal;
 
@@ -897,7 +1016,85 @@ public final class BotActions {
     }
 
     /**
+     * 紧急浮上水面：在水下时持续给一个向上的速度，直到头部离开水面或超时。
+     * <p>注意不能用 JumpAction：它在水下 {@code onGround()} 为 false，根本不会起跳。</p>
+     */
+    public CompletableFuture<Boolean> surface(Bot bot) {
+        return waterBoost(bot, null, 120);
+    }
+
+    /**
+     * 从水里爬上岸：朝岸边给「向上 + 向前」的速度，帮助假人越过 1 格高的岸沿。
+     *
+     * @param shore 岸边落脚点
+     */
+    public CompletableFuture<Boolean> climbOutOfWater(Bot bot, Location shore) {
+        return waterBoost(bot, shore, 80);
+    }
+
+    /**
+     * 水域位移辅助：每 2 tick 覆盖一次水平/垂直速度。
+     *
+     * @param shore 上岸方向；null 表示只向上浮
+     */
+    private CompletableFuture<Boolean> waterBoost(Bot bot, Location shore, int maxTicks) {
+        if (bot == null || !bot.isValid()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        if (!bot.isInWater() && !bot.isUnderWater()) {
+            return CompletableFuture.completedFuture(true);
+        }
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        int[] elapsed = {0};
+        BukkitTask[] taskRef = new BukkitTask[1];
+        Vector direction = new Vector(0, 0, 0);
+        if (shore != null) {
+            direction = shore.toVector().subtract(bot.getLocation().toVector()).setY(0);
+            if (direction.lengthSquared() > 0.0001) {
+                direction.normalize();
+            }
+        }
+        final Vector horizontal = direction;
+        BukkitTask task = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            boolean finished;
+            Boolean done = null;
+            try {
+                elapsed[0] += 2;
+                if (!bot.isValid()) {
+                    done = false;
+                } else if (shore == null ? !bot.isUnderWater() : !bot.isInWater()) {
+                    done = true;
+                } else if (elapsed[0] >= maxTicks) {
+                    done = false;
+                } else {
+                    Vector velocity = bot.getVelocity();
+                    double y = Math.max(0.32, Math.min(0.45, velocity.getY()));
+                    bot.setVelocity(new Vector(horizontal.getX() * 0.20, y, horizontal.getZ() * 0.20));
+                }
+            } catch (Throwable throwable) {
+                done = false;
+            }
+            finished = done != null;
+            if (finished) {
+                future.complete(done);
+            }
+        }, 0L, 2L);
+        taskRef[0] = task;
+        future.whenComplete((result, error) -> {
+            if (taskRef[0] != null) {
+                taskRef[0].cancel();
+            }
+            if (bot.isValid()) {
+                bot.setFallDistance(0.0f);
+            }
+        });
+        return future;
+    }
+
+    /**
      * 远离威胁；sneak=true 时全程潜行（用于坚守者）。
+     * <p>用 {@code PRIORITY_HIGH}：跟随是 HIGH 时 {@code claim()} 会挡住普通优先级，
+     * 之前「跟着主人时撤退一秒就结束、然后原地发呆」就是这么来的。</p>
      */
     public CompletableFuture<Boolean> retreatFrom(Bot bot, LivingEntity threat, double distance, boolean sneak) {
         if (bot == null || !bot.isValid()) {
@@ -911,7 +1108,9 @@ public final class BotActions {
         if (sneak) {
             bot.setSneaking(true);
         }
-        return navigator.navigateAndWait(bot, safe, 1.5, 140)
+        // 撤退途中别被跟随看门狗拉回去（持续撤退的调用方会自己反复延长这个暂停）
+        navigator.suspendFollow(bot, 8000L);
+        return navigator.navigateAndWait(bot, safe, 1.5, 240, BotNavigator.PRIORITY_HIGH)
                 .whenComplete((arrived, error) -> Tasks.onMain(plugin, () -> {
                     if (bot.isValid()) {
                         bot.setSprinting(false);

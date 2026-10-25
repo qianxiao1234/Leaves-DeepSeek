@@ -134,6 +134,7 @@ public final class BotStateService {
         yaml.set("exp", bot.getExp());
         yaml.set("total-experience", bot.getTotalExperience());
         yaml.set("gamemode", bot.getGameMode().name());
+        yaml.set("downed", plugin.bots().isDowned(bot));
 
         if (contents != null) {
             for (int slot = 0; slot < Math.min(INVENTORY_SLOTS, contents.length); slot++) {
@@ -331,6 +332,32 @@ public final class BotStateService {
         }
     }
 
+    /** 该玩家是否有可用的假人存档（用于「复活/唤醒」）。 */
+    public boolean hasState(UUID ownerId) {
+        return ownerId != null && plugin.profiles().stateFileOf(ownerId).exists();
+    }
+
+    /**
+     * 从存档重新生成该玩家的假人（供 {@code /buddy bot revive} 使用）。
+     *
+     * @return true 表示已开始生成（皮肤可能异步加载，需要轮询等待）
+     */
+    public boolean restoreSaved(UUID ownerId) {
+        if (ownerId == null) {
+            return false;
+        }
+        File file = plugin.profiles().stateFileOf(ownerId);
+        if (!file.exists()) {
+            return false;
+        }
+        try {
+            return restore(ownerId, YamlConfiguration.loadConfiguration(file), 0);
+        } catch (Throwable throwable) {
+            plugin.getLogger().warning("从存档唤醒假人失败：" + throwable.getMessage());
+            return false;
+        }
+    }
+
     /**
      * 启动时扫描所有玩家目录并恢复假人。
      */
@@ -507,6 +534,13 @@ public final class BotStateService {
 
             for (int slot = 0; slot < INVENTORY_SLOTS; slot++) {
                 bot.getInventory().setItem(slot, yaml.getItemStack("inventory." + slot));
+            }
+
+            if (yaml.getBoolean("downed", false)) {
+                // 上次是倒地状态存档的：恢复后仍然是倒地状态，等主人复活
+                plugin.bots().markDowned(bot, false);
+                bot.setInvulnerable(true);
+                bot.setHealth(Math.min(1.0, Math.max(0.1, bot.getMaxHealth())));
             }
         } catch (Throwable throwable) {
             plugin.getLogger().warning("应用假人状态失败：" + throwable.getMessage());

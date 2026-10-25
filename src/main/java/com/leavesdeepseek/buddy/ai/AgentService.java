@@ -83,14 +83,17 @@ public final class AgentService implements AutoCloseable {
 
         if (resolved.needsChoice()) {
             return CompletableFuture.completedFuture(
-                    "你同时配置了 DeepSeek 和 AstrBot。请先用 /buddy ai set default（DeepSeek，可操作假人）"
-                            + " 或 /buddy ai set astrbot（纯对话）选择默认模型。");
+                    "你同时配置了 DeepSeek 和 AstrBot。请先用 /buddy ai backend deepseek（DeepSeek，可操作假人）"
+                            + " 或 /buddy ai backend astrbot（纯对话）选择默认模型。");
         }
         if (!resolved.usable()) {
             String reason = resolved.reason();
             return CompletableFuture.completedFuture(reason == null || reason.isBlank()
-                    ? "还没有可用的 AI，请先用 /buddy set <apikey> 配置 DeepSeek Key。"
+                    ? "还没有可用的 AI，请先用 /buddy ai set <apikey> 配置 DeepSeek Key。"
                     : reason);
+        }
+        if (plugin.bots().isDowned(bot)) {
+            return CompletableFuture.completedFuture("我现在倒在地上，先让我复活吧（说「复活」或 /buddy bot revive）。");
         }
         if (!busy.add(bot.getUniqueId())) {
             plugin.log().warn("AI", "拒绝：上一次请求还没结束（bot=" + BotNames.rawName(bot) + "）");
@@ -121,7 +124,7 @@ public final class AgentService implements AutoCloseable {
                 String reason = validated.reason();
                 plugin.log().warn("AI", "DeepSeek 不可用：" + reason);
                 return CompletableFuture.completedFuture(reason == null || reason.isBlank()
-                        ? "DeepSeek 配置不可用，请用 /buddy set <apikey> 重新配置。"
+                        ? "DeepSeek 配置不可用，请用 /buddy ai set <apikey> 重新配置。"
                         : reason);
             }
             return Tasks.onMain(plugin, () -> BotSnapshot.capture(bot, owner))
@@ -165,12 +168,15 @@ public final class AgentService implements AutoCloseable {
         try {
             messages.add(Json.obj("role", "system", "content",
                     PromptBuilder.systemPrompt(settings, bot, owner, state.toString(),
-                            session.recentActionsText(), persona)));
+                            session.recentActionsText(), persona, buildToolGuide(tools.schemas()))));
             for (JsonObject history : session.historySnapshot()) {
                 messages.add(history.deepCopy());
             }
             messages.add(Json.obj("role", "user", "content", userMessage));
 
+            // 推理型模型的「加大 max_tokens 重试」每次请求只做一次，避免无限翻倍
+            boolean lengthRetried = false;
+            String lastFinishReason = null;
             for (int round = 0; round < settings.maxToolRounds(); round++) {
                 if (!bot.isValid()) {
                     plugin.log().warn("DeepSeek", "假人已失效，中止。requestId=" + requestId);
@@ -188,18 +194,56 @@ public final class AgentService implements AutoCloseable {
                 JsonObject response = client.chat(messages, tools.schemas(), api, requestId).join();
                 JsonObject message = extractMessage(response);
                 String content = Json.getString(message, "content", "");
+                // 推理型本地模型（R1 / QwQ 等）会把 token 花在 reasoning_content 上，
+                // max_tokens 太小时 content 为空、finish_reason=length。这里自动加大上限重试一次。
+                if ((content == null || content.isBlank())
+                        && !lengthRetried
+                        && "length".equals(finishReason(response))) {
+                    int bigger = Math.min(8192, Math.max(2048, settings.maxTokens() * 2));
+                    if (bigger > settings.maxTokens()) {
+                        lengthRetried = true;
+                        plugin.log().warn("DeepSeek", "输出被 max_tokens 截断（推理占满），用 "
+                                + bigger + " 重试一次 | 模型=" + api.model() + " | requestId=" + requestId);
+                        plugin.getLogger().warning("[DeepSeek] 模型输出被 max_tokens 截断，已自动用 "
+                                + bigger + " 重试（可在 config.yml 调大 deepseek.max-tokens）");
+                        response = client.chat(messages, tools.schemas(), api,
+                                requestId + "-long", bigger).join();
+                        message = extractMessage(response);
+                        content = Json.getString(message, "content", "");
+                    }
+                }
+                lastFinishReason = finishReason(response);
                 JsonArray toolCalls = message.has("tool_calls") && message.get("tool_calls").isJsonArray()
                         ? message.getAsJsonArray("tool_calls")
                         : null;
+                boolean textualToolCall = false;
+                if ((toolCalls == null || toolCalls.isEmpty()) && content != null && !content.isBlank()) {
+                    // 本地小模型不支持 function calling 时，会把工具调用写成正文 JSON，这里兜住
+                    JsonArray salvaged = parseTextToolCalls(content);
+                    if (salvaged != null && !salvaged.isEmpty()) {
+                        toolCalls = salvaged;
+                        textualToolCall = true;
+                        content = "";
+                        plugin.log().info("DeepSeek", "模型没有走 Function Calling，已从正文解析工具调用"
+                                + " | requestId=" + requestId
+                                + " | 工具=" + salvaged.get(0).getAsJsonObject()
+                                .getAsJsonObject("function").get("name").getAsString());
+                    }
+                }
                 plugin.log().info("DeepSeek", "第 " + (round + 1) + " 轮响应 | requestId=" + requestId
                         + " | 文本长度=" + (content == null ? 0 : content.length())
                         + " | 工具调用=" + (toolCalls == null ? 0 : toolCalls.size()));
 
                 JsonObject assistant = new JsonObject();
                 assistant.addProperty("role", "assistant");
-                assistant.addProperty("content", content == null ? "" : content);
-                if (toolCalls != null && !toolCalls.isEmpty()) {
-                    assistant.add("tool_calls", toolCalls.deepCopy());
+                if (textualToolCall) {
+                    // 纯文本模型不认识 tool_calls，用自然语言把「刚才调用了什么」写回去
+                    assistant.addProperty("content", "（正在执行工具：" + firstToolName(toolCalls) + "）");
+                } else {
+                    assistant.addProperty("content", content == null ? "" : content);
+                    if (toolCalls != null && !toolCalls.isEmpty()) {
+                        assistant.add("tool_calls", toolCalls.deepCopy());
+                    }
                 }
                 messages.add(assistant);
 
@@ -249,10 +293,18 @@ public final class AgentService implements AutoCloseable {
                             + " | 结果=" + Json.truncate(result, 400));
 
                     session.log(toolName, arguments.toString(), result);
-                    messages.add(Json.obj(
-                            "role", "tool",
-                            "tool_call_id", callId,
-                            "content", Json.truncate(result, MAX_TOOL_RESULT_CHARS)));
+                    if (textualToolCall) {
+                        // 纯文本模型：用 user 消息回报结果，避免服务端不认识 role=tool
+                        messages.add(Json.obj(
+                                "role", "user",
+                                "content", "工具 " + toolName + " 返回："
+                                        + Json.truncate(result, MAX_TOOL_RESULT_CHARS)));
+                    } else {
+                        messages.add(Json.obj(
+                                "role", "tool",
+                                "tool_call_id", callId,
+                                "content", Json.truncate(result, MAX_TOOL_RESULT_CHARS)));
+                    }
 
                     if (settings.debug()) {
                         plugin.getLogger().info("[DeepSeek/" + requestId + "] 工具 " + toolName
@@ -267,8 +319,14 @@ public final class AgentService implements AutoCloseable {
             }
 
             if (finalText == null || finalText.isBlank()) {
-                plugin.log().info("DeepSeek", "达到工具轮次上限或无文本，改走 summarize | requestId=" + requestId);
-                finalText = summarize(bot, messages, api, requestId);
+                if ("length".equals(lastFinishReason)) {
+                    plugin.log().warn("DeepSeek", "模型输出仍被 max_tokens 截断，放弃 summarize | requestId=" + requestId);
+                    finalText = "模型的输出被 max_tokens 截断了（推理内容占用了全部额度）。"
+                            + "可以让服主调大 config.yml 的 deepseek.max-tokens，或换一个支持工具调用的模型。";
+                } else {
+                    plugin.log().info("DeepSeek", "达到工具轮次上限或无文本，改走 summarize | requestId=" + requestId);
+                    finalText = summarize(bot, messages, api, requestId);
+                }
             }
             if (finalText == null || finalText.isBlank()) {
                 plugin.log().warn("DeepSeek", "summarize 也没拿到内容，使用兜底文本 | requestId=" + requestId);
@@ -303,6 +361,147 @@ public final class AgentService implements AutoCloseable {
                     + " | requestId=" + requestId);
             return null;
         }
+    }
+
+    /**
+     * 把工具 schema 压成一份「工具名(参数)：说明」的速查表，塞进系统提示词。
+     * 本地部署的小模型看不到工具语义时最容易漏调用，这份表就是给它看的说明书。
+     */
+    private static String buildToolGuide(JsonArray schemas) {
+        if (schemas == null || schemas.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (JsonElement element : schemas) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject entry = element.getAsJsonObject();
+            if (!entry.has("function") || !entry.get("function").isJsonObject()) {
+                continue;
+            }
+            JsonObject function = entry.getAsJsonObject("function");
+            String name = Json.getString(function, "name", "");
+            if (name.isBlank()) {
+                continue;
+            }
+            String description = Json.getString(function, "description", "");
+            List<String> required = new ArrayList<>();
+            List<String> optional = new ArrayList<>();
+            JsonArray requiredArray = null;
+            if (function.has("parameters") && function.get("parameters").isJsonObject()) {
+                JsonObject parameters = function.getAsJsonObject("parameters");
+                if (parameters.has("required") && parameters.get("required").isJsonArray()) {
+                    requiredArray = parameters.getAsJsonArray("required");
+                }
+                if (parameters.has("properties") && parameters.get("properties").isJsonObject()) {
+                    for (Map.Entry<String, JsonElement> property
+                            : parameters.getAsJsonObject("properties").entrySet()) {
+                        if (isRequired(requiredArray, property.getKey())) {
+                            required.add(property.getKey() + "*");
+                        } else {
+                            optional.add(property.getKey());
+                        }
+                    }
+                }
+            }
+            List<String> arguments = new ArrayList<>(required);
+            arguments.addAll(optional);
+            builder.append("- ").append(name).append('(')
+                    .append(arguments.isEmpty() ? "" : String.join(", ", arguments))
+                    .append(")：").append(description).append('\n');
+        }
+        return builder.toString().trim();
+    }
+
+    private static boolean isRequired(JsonArray required, String name) {
+        if (required == null) {
+            return false;
+        }
+        for (JsonElement element : required) {
+            if (element.isJsonPrimitive() && name.equals(element.getAsString())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 容错解析：有些模型（尤其是本地部署的）不会走 function calling，
+     * 而是把调用写成正文里的 JSON，例如：
+     * <pre>{"name":"chop_tree","arguments":{}}</pre>
+     * 这里把它转换成标准的 tool_calls 结构，后面的流程完全一致。
+     *
+     * @return 解析出的工具调用；没有则返回 null
+     */
+    private static String firstToolName(JsonArray toolCalls) {
+        if (toolCalls == null || toolCalls.isEmpty() || !toolCalls.get(0).isJsonObject()) {
+            return "?";
+        }
+        JsonObject call = toolCalls.get(0).getAsJsonObject();
+        JsonObject function = call.has("function") && call.get("function").isJsonObject()
+                ? call.getAsJsonObject("function")
+                : new JsonObject();
+        return Json.getString(function, "name", "?");
+    }
+
+    private JsonArray parseTextToolCalls(String content) {
+        if (content == null) {
+            return null;
+        }
+        int start = content.indexOf('{');
+        int end = content.lastIndexOf('}');
+        if (start < 0 || end <= start) {
+            return null;
+        }
+        JsonObject call = Json.parse(content.substring(start, end + 1));
+        if (call == null || call.isEmpty()) {
+            return null;
+        }
+        String name = Json.getString(call, "name", "");
+        JsonElement arguments = call.get("arguments");
+        if (name.isBlank() && call.has("function") && call.get("function").isJsonObject()) {
+            JsonObject function = call.getAsJsonObject("function");
+            name = Json.getString(function, "name", "");
+            arguments = function.get("arguments");
+        }
+        if (name.isBlank()) {
+            name = Json.getString(call, "tool", "");
+        }
+        if (name.isBlank()) {
+            return null;
+        }
+        if (arguments == null || arguments.isJsonNull()) {
+            if (call.has("args")) {
+                arguments = call.get("args");
+            } else if (call.has("parameters")) {
+                arguments = call.get("parameters");
+            }
+        }
+        JsonObject function = new JsonObject();
+        function.addProperty("name", name.trim());
+        function.addProperty("arguments", arguments == null || arguments.isJsonNull()
+                ? "{}"
+                : (arguments.isJsonPrimitive() ? arguments.getAsString() : arguments.toString()));
+        JsonObject toolCall = new JsonObject();
+        toolCall.addProperty("id", "call_" + UUID.randomUUID().toString().substring(0, 8));
+        toolCall.addProperty("type", "function");
+        toolCall.add("function", function);
+        JsonArray result = new JsonArray();
+        result.add(toolCall);
+        return result;
+    }
+
+    /** 读取 choices[0].finish_reason（"stop" / "length" / ...）。 */
+    private static String finishReason(JsonObject response) {
+        if (response == null || !response.has("choices") || !response.get("choices").isJsonArray()) {
+            return "";
+        }
+        JsonArray choices = response.getAsJsonArray("choices");
+        if (choices.isEmpty() || !choices.get(0).isJsonObject()) {
+            return "";
+        }
+        return Json.getString(choices.get(0).getAsJsonObject(), "finish_reason", "");
     }
 
     private JsonObject extractMessage(JsonObject response) {

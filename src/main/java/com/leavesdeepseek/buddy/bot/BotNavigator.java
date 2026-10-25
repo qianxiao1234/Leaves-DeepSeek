@@ -3,12 +3,18 @@ package com.leavesdeepseek.buddy.bot;
 import com.leavesdeepseek.buddy.config.PluginSettings;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import org.leavesmc.leaves.entity.bot.Bot;
+import org.leavesmc.leaves.entity.bot.action.BotAction;
 import org.leavesmc.leaves.entity.bot.action.JumpAction;
 import org.leavesmc.leaves.entity.bot.action.MoveAction;
+import org.leavesmc.leaves.entity.bot.action.MoveAction.MoveDirection;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,6 +44,12 @@ public final class BotNavigator {
     private static final double FOLLOW_HYSTERESIS = 1.5;
     /** cancel() 之后暂停多久再自动恢复跟随 */
     private static final long FOLLOW_PAUSE_MS = 4000L;
+    /** 正前方地形探测距离（略大于 1 格，避免贴到墙才反应） */
+    private static final double PROBE_DISTANCE = 0.9;
+    /** 贴墙时向侧面挪的持续 tick */
+    private static final int SIDESTEP_TICKS = 10;
+    /** 完全卡死时先后退的 tick，再重新寻路 */
+    private static final int BACKOFF_TICKS = 8;
 
     private final JavaPlugin plugin;
     private final PluginSettings settings;
@@ -51,6 +63,11 @@ public final class BotNavigator {
     private final Map<UUID, Integer> locks = new HashMap<>();
 
     private BukkitTask ticker;
+
+    /** 正前方地形探测结果 */
+    private enum Ahead {
+        CLEAR, STEP_UP, BLOCKED
+    }
 
     public BotNavigator(JavaPlugin plugin, PluginSettings settings, BotService bots) {
         this.plugin = plugin;
@@ -94,6 +111,9 @@ public final class BotNavigator {
         if (bot == null || target == null) {
             return CompletableFuture.completedFuture(false);
         }
+        if (bots.isDowned(bot)) {
+            return CompletableFuture.completedFuture(false);
+        }
         if (!claim(bot, priority)) {
             return CompletableFuture.completedFuture(false);
         }
@@ -120,6 +140,21 @@ public final class BotNavigator {
         follow(bot, target, distance, PRIORITY_HIGH);
     }
 
+    /**
+     * 只记下「要跟随」这件事，不立刻启动导航。
+     * <p>用于主人说「跟着我」但假人正在强制进食：那口饭吃完（{@code endJob}）后
+     * 会自动接着跟随。优先级仍然是 HIGH。</p>
+     */
+    public void deferForceFollow(Bot bot, Player target, double distance) {
+        if (bot == null || target == null) {
+            return;
+        }
+        UUID botId = bot.getUniqueId();
+        followDisabled.remove(botId);
+        follows.put(botId, new FollowState(target.getUniqueId(), Math.max(1.0, distance),
+                PRIORITY_HIGH, 0L));
+    }
+
     private void follow(Bot bot, Player target, double distance, int priority) {
         if (bot == null || target == null) {
             return;
@@ -136,6 +171,11 @@ public final class BotNavigator {
         }
         FollowState state = new FollowState(target.getUniqueId(), Math.max(1.0, distance), priority, 0L);
         follows.put(botId, state);
+
+        if (bots.isDowned(bot)) {
+            // 倒地时不启动导航，只记住「要跟随」，复活后自动接上
+            return;
+        }
 
         if (locks.containsKey(botId) && priority < PRIORITY_HIGH) {
             // 正在挖/砍/吃，等动作结束后由 unlockFollow 接上跟随
@@ -168,9 +208,9 @@ public final class BotNavigator {
     }
 
     /**
-     * 彻底停止跟随（主人说「停下」/ stop_all_actions / /buddy stop 时使用）。
+     * 彻底停止跟随（主人说「停下」/ stop_all_actions / /buddy move stop 时使用）。
      * <p>会记住「主人让我别跟着」，之后战斗结束、任务结束都不会自动恢复跟随；
-     * 只有 forceFollow（主人明确说「跟着我」或 /buddy follow）才会重新开启。</p>
+     * 只有 forceFollow（主人明确说「跟着我」或 /buddy move follow）才会重新开启。</p>
      */
     public void stopFollow(Bot bot) {
         if (bot == null) {
@@ -185,6 +225,56 @@ public final class BotNavigator {
             task.cancelMovement();
             task.future.complete(false);
         }
+    }
+
+    /**
+     * 只清掉跟随状态，**不**写「别跟着」标记。
+     * <p>给 AI 躯壳用：它们没有主人、跟随只是某个任务，任务结束/暂停时必须彻底停掉，
+     * 否则看门狗会把跟随又接回去（躯壳在旁观态还会自己走开）。传统假人不要用这个。</p>
+     */
+    public void abortFollow(Bot bot) {
+        if (bot == null) {
+            return;
+        }
+        UUID botId = bot.getUniqueId();
+        follows.remove(botId);
+        NavTask task = tasks.get(botId);
+        if (task != null && task.following()) {
+            tasks.remove(botId);
+            task.cancelMovement();
+            task.future.complete(false);
+        }
+    }
+
+    /**
+     * 暂停粘性跟随一段时间（不写 followDisabled）。
+     * <p>用于「有苦力怕先跑开」「水下先浮上来换气」这类临时避险：到点后
+     * {@code resumeFollow} 会自动接上；如果这期间主人说了「跟着我」，
+     * {@code forceFollow} 会直接覆盖暂停状态。</p>
+     */
+    public void suspendFollow(Bot bot, long millis) {
+        if (bot == null) {
+            return;
+        }
+        UUID botId = bot.getUniqueId();
+        FollowState state = follows.get(botId);
+        if (state != null) {
+            follows.put(botId, state.pause(Math.max(0L, millis)));
+        }
+        NavTask task = tasks.get(botId);
+        if (task != null && task.following()) {
+            tasks.remove(botId);
+            task.cancelMovement();
+            task.future.complete(false);
+        }
+    }
+
+    /**
+     * 是否「想跟着主人」（粘性跟随状态存在，即使因为躲苦力怕/换气被临时暂停）。
+     */
+    public boolean hasFollowIntent(Bot bot) {
+        return bot != null && follows.containsKey(bot.getUniqueId())
+                && !followDisabled.contains(bot.getUniqueId());
     }
 
     /**
@@ -399,8 +489,11 @@ public final class BotNavigator {
                 continue;
             }
             Bot bot = bots.byId(botId);
-            if (bot == null || !bot.isValid() || bot.isDead() || bot.isSleeping()) {
+            if (bot == null || !bot.isValid()) {
                 follows.remove(botId);
+                continue;
+            }
+            if (bots.isDowned(bot) || bot.isDead() || bot.isSleeping()) {
                 continue;
             }
             startFollow(bot, state);
@@ -444,6 +537,11 @@ public final class BotNavigator {
         private boolean forceRepath;
         private boolean moving;
         private float yaw;
+        /** 贴墙时向侧面挪的剩余 tick 与方向 */
+        private int sidestepTicks;
+        private MoveDirection sidestepDirection;
+        /** 完全卡死时先后退，再重新寻路 */
+        private int backoffTicks;
 
         private boolean wandering;
         private Location wanderTarget;
@@ -508,7 +606,9 @@ public final class BotNavigator {
         }
 
         /**
-         * 跳过已经走到的路径点。旧实现每次都从 path[0]（自己脚下的格子中心）重新开始，
+         * 跳过已经走到的路径点；顺带把能直线走到的更远节点提前（视线拉直），
+         * 这样拐角处不用沿着格子中心一格一格蹭，视觉上更像玩家在走。
+         * 旧实现每次都从 path[0]（自己脚下的格子中心）重新开始，
          * 一旦重新寻路就会掉头走回去，表现为「原地转圈」。
          */
         private void skipPassedNodes() {
@@ -517,6 +617,11 @@ public final class BotNavigator {
             }
             while (index < path.size() - 1 && reachedNode(path.get(index))) {
                 index++;
+            }
+            int advanced = 0;
+            while (index < path.size() - 1 && advanced < 6 && straightWalkable(path.get(index + 1))) {
+                index++;
+                advanced++;
             }
         }
 
@@ -589,6 +694,10 @@ public final class BotNavigator {
             }
             if (!bot.isValid()) {
                 fail("假人已离线");
+                return;
+            }
+            if (bots.isDowned(bot)) {
+                cancelMovement();
                 return;
             }
             if (bot.isSleeping()) {
@@ -678,6 +787,20 @@ public final class BotNavigator {
                 return;
             }
 
+            // 撤退：完全卡死时先后退一小步，再重新寻路（比顶着墙推更像玩家）
+            if (backoffTicks > 0) {
+                backoffTicks -= 2;
+                stopMove(bot, MoveDirection.FORWARD);
+                stopMove(bot, MoveDirection.LEFT);
+                stopMove(bot, MoveDirection.RIGHT);
+                ensureMove(bot, MoveDirection.BACKWARD);
+                if (backoffTicks <= 0) {
+                    cancelMovement();
+                    forceRepath = true;
+                }
+                return;
+            }
+
             Location node = path.get(index);
 
             // 转向：限制每次最大转角；偏差过大时先原地转身，不走动
@@ -700,10 +823,32 @@ public final class BotNavigator {
                 jump(bot);
             }
 
+            if (sidestepTicks > 0) {
+                sidestepTicks -= 2;
+                if (sidestepTicks <= 0) {
+                    stopSidestep(bot);
+                }
+            }
+
             if (aligned) {
-                ensureForward(bot);
+                ensureMove(bot, MoveDirection.FORWARD);
+                // 视线拉直后仍然正对着一堵墙：能跳就跳，不能跳就侧移贴着墙滑过去。
+                // 这是「不容易卡墙」的关键：假人不再一直顶着墙面推。
+                Ahead ahead = probeAhead();
+                if (ahead == Ahead.STEP_UP) {
+                    jump(bot);
+                } else if (ahead == Ahead.BLOCKED) {
+                    if (!trySidestep(bot)) {
+                        // 正面和左右都不通：下一轮立刻重算路线
+                        stuckStrikes = Math.max(stuckStrikes, 2);
+                        forceRepath = true;
+                    }
+                }
             } else {
-                bots.stopActions(bot, MoveAction.class);
+                stopMove(bot, MoveDirection.FORWARD);
+                if (sidestepTicks <= 0) {
+                    stopSidestep(bot);
+                }
             }
 
             // 卡住检测：每 10 tick 采样一次
@@ -719,6 +864,12 @@ public final class BotNavigator {
                     if (stuckStrikes >= 2) {
                         forceRepath = true;
                     }
+                    if (stuckStrikes >= 6 && backoffTicks <= 0) {
+                        backoffTicks = BACKOFF_TICKS;
+                        beginBackoff();
+                        stuckStrikes = 0;
+                        return;
+                    }
                     if (stuckStrikes >= 8) {
                         recoverStuck(node);
                         stuckStrikes = 0;
@@ -730,6 +881,13 @@ public final class BotNavigator {
                 lastX = bot.getX();
                 lastZ = bot.getZ();
             }
+        }
+
+        private void beginBackoff() {
+            cancelMovement();
+            path = null;
+            forceRepath = true;
+            ensureMove(bot, MoveDirection.BACKWARD);
         }
 
         /**
@@ -776,12 +934,140 @@ public final class BotNavigator {
             fail("被地形挡住了，过不去");
         }
 
-        private void ensureForward(Bot bot) {
-            if (!bots.hasAction(bot, MoveAction.class)) {
+        private void ensureMove(Bot bot, MoveDirection direction) {
+            try {
+                for (int index = 0; index < bot.getActionSize(); index++) {
+                    BotAction<?> action = bot.getAction(index);
+                    if (action instanceof MoveAction move && move.getDirection() == direction) {
+                        return;
+                    }
+                }
                 MoveAction move = MoveAction.create();
-                move.setDirection(MoveAction.MoveDirection.FORWARD);
+                move.setDirection(direction);
                 bot.addAction(move);
+            } catch (RuntimeException ignored) {
+                // 假人可能已被移除
             }
+        }
+
+        private void stopMove(Bot bot, MoveDirection direction) {
+            try {
+                for (int index = bot.getActionSize() - 1; index >= 0; index--) {
+                    BotAction<?> action = bot.getAction(index);
+                    if (action instanceof MoveAction move && move.getDirection() == direction) {
+                        bot.stopAction(index);
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // 假人可能已被移除
+            }
+        }
+
+        private void stopSidestep(Bot bot) {
+            if (sidestepDirection != null) {
+                stopMove(bot, sidestepDirection);
+                sidestepDirection = null;
+            }
+            sidestepTicks = 0;
+        }
+
+        /**
+         * 正前方被挡住时尝试侧移一步。贴墙滑动比顶着墙推更自然，也能更快绕过门框和墙角。
+         */
+        private boolean trySidestep(Bot bot) {
+            if (sidestepTicks > 0 && sidestepDirection != null) {
+                return true;
+            }
+            boolean left = sideOpen(1);
+            boolean right = sideOpen(-1);
+            if (!left && !right) {
+                return false;
+            }
+            sidestepDirection = left ? MoveDirection.LEFT : MoveDirection.RIGHT;
+            sidestepTicks = SIDESTEP_TICKS;
+            ensureMove(bot, sidestepDirection);
+            return true;
+        }
+
+        /** 探测正前方 0.9 格处的地形。 */
+        private Ahead probeAhead() {
+            Location origin = bot.getLocation();
+            World world = origin.getWorld();
+            if (world == null) {
+                return Ahead.CLEAR;
+            }
+            Block feet = blockAtDirection(world, origin, yaw, PROBE_DISTANCE);
+            Block head = feet.getRelative(BlockFace.UP);
+            Block above = head.getRelative(BlockFace.UP);
+            if (isOpen(feet) && isOpen(head)) {
+                return Ahead.CLEAR;
+            }
+            if (feet.getType().isSolid() && isOpen(head) && isOpen(above)) {
+                return Ahead.STEP_UP;
+            }
+            return Ahead.BLOCKED;
+        }
+
+        /** 侧面（sign=1 左、-1 右）能否站人。 */
+        private boolean sideOpen(int sign) {
+            Location origin = bot.getLocation();
+            World world = origin.getWorld();
+            if (world == null) {
+                return false;
+            }
+            Block feet = blockAtDirection(world, origin, yaw - 90.0f * sign, PROBE_DISTANCE);
+            return isOpen(feet) && isOpen(feet.getRelative(BlockFace.UP));
+        }
+
+        private Block blockAtDirection(World world, Location origin, float degrees, double distance) {
+            double radians = Math.toRadians(degrees);
+            double x = origin.getX() - Math.sin(radians) * distance;
+            double z = origin.getZ() + Math.cos(radians) * distance;
+            // +0.6 是为了跳过脚下那半格（台阶/半砖），取身体下部的方块
+            return world.getBlockAt(new Location(world, x, origin.getY() + 0.6, z));
+        }
+
+        private boolean isOpen(Block block) {
+            Material type = block.getType();
+            if (type == Material.LAVA || type == Material.FIRE || type == Material.SOUL_FIRE
+                    || type == Material.CACTUS || type == Material.POWDER_SNOW
+                    || type == Material.MAGMA_BLOCK) {
+                return false;
+            }
+            return block.isPassable();
+        }
+
+        /**
+         * 从当前位置到目标点能不能直线走过去（只用于同高度的路径拉直）。
+         */
+        private boolean straightWalkable(Location node) {
+            Location from = bot.getLocation();
+            World world = from.getWorld();
+            if (world == null || node.getWorld() == null || !world.equals(node.getWorld())) {
+                return false;
+            }
+            if (Math.abs(node.getY() - from.getY()) > 0.75) {
+                return false;
+            }
+            double dx = node.getX() - from.getX();
+            double dz = node.getZ() - from.getZ();
+            double distance = Math.hypot(dx, dz);
+            if (distance < 0.25 || distance > 5.0) {
+                return false;
+            }
+            int steps = Math.max(1, (int) Math.ceil(distance / 0.35));
+            for (int i = 1; i <= steps; i++) {
+                double t = i / (double) steps;
+                Block feet = world.getBlockAt(new Location(world,
+                        from.getX() + dx * t, from.getY() + 0.6, from.getZ() + dz * t));
+                if (!isOpen(feet) || !isOpen(feet.getRelative(BlockFace.UP))) {
+                    return false;
+                }
+                if (!feet.getRelative(BlockFace.DOWN).getType().isSolid()) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private void jump(Bot bot) {
@@ -854,6 +1140,8 @@ public final class BotNavigator {
         private void cancelMovement() {
             bots.stopActions(bot, MoveAction.class);
             bots.stopActions(bot, JumpAction.class);
+            sidestepTicks = 0;
+            sidestepDirection = null;
             try {
                 // 导航结束后别一直保持着疾跑标记
                 bot.setSprinting(false);

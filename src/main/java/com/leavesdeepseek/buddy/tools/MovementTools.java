@@ -114,10 +114,16 @@ public final class MovementTools {
             }
             double distance = Json.getDouble(arguments, "distance", plugin.settings().followDistance());
             Bot bot = context.bot();
-            // 跟随是最高优先级指令：先停掉手上的活，再开始跟
-            plugin.botActions().preempt(bot, "主人让你跟上");
-            plugin.navigator().forceFollow(bot, owner, Math.max(1.0, Math.min(16.0, distance)));
-            return done(Json.ok("开始跟随主人"));
+            // 跟随是最高优先级指令：先停掉手上的活，再开始跟（强制进食时会自动延后）
+            boolean started = plugin.followBotFromAi(bot, owner,
+                    Math.max(1.0, Math.min(16.0, distance)));
+            if (started) {
+                return done(Json.ok("开始跟随主人"));
+            }
+            String reason = plugin.followDeferReason(bot);
+            return done(Json.ok("creeper".equals(reason)
+                    ? "正在躲苦力怕，安全后会立刻跟上"
+                    : "正在强制进食或倒地中，恢复后会立刻跟上"));
         });
     }
 

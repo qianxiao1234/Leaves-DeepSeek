@@ -1,5 +1,6 @@
 package com.leavesdeepseek.buddy.config;
 
+import com.leavesdeepseek.buddy.ai.AiDefaults;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.EntityType;
@@ -119,15 +120,13 @@ public final class PluginSettings {
         plugin.reloadConfig();
         FileConfiguration config = plugin.getConfig();
 
-        String key = config.getString("deepseek.api-key", "");
-        if (key == null || key.isBlank()) {
-            key = System.getenv("DEEPSEEK_API_KEY");
-        }
-        apiKey = key == null ? "" : key.trim();
-        baseUrl = trimTrailingSlash(config.getString("deepseek.base-url", "https://api.deepseek.com"));
-        model = config.getString("deepseek.model", "deepseek-chat");
+        // 默认值全部走 AiDefaults：/buddy global clean 清空后与「配置项缺省」保持完全一致
+        String key = config.getString("deepseek.api-key", AiDefaults.API_KEY);
+        apiKey = key == null ? AiDefaults.API_KEY : key.trim();
+        baseUrl = AiDefaults.baseUrlOrDefault(config.getString("deepseek.base-url", AiDefaults.BASE_URL));
+        model = AiDefaults.modelOrDefault(config.getString("deepseek.model", AiDefaults.MODEL));
         temperature = config.getDouble("deepseek.temperature", 0.6);
-        maxTokens = Math.max(64, config.getInt("deepseek.max-tokens", 1024));
+        maxTokens = Math.max(64, config.getInt("deepseek.max-tokens", 4096));
         requestTimeoutSeconds = Math.max(10, config.getInt("deepseek.timeout-seconds", 60));
         toolTimeoutSeconds = Math.max(10, config.getInt("deepseek.tool-timeout-seconds", 90));
         maxToolRounds = Math.max(1, Math.min(20, config.getInt("deepseek.max-tool-rounds", 8)));
@@ -139,7 +138,7 @@ public final class PluginSettings {
         namePrefix = config.getString("companion.name-prefix", "AI_");
         defaultSkin = config.getString("companion.default-skin", "");
         maxPerPlayer = Math.max(1, config.getInt("companion.max-per-player", 1));
-        autoFollow = config.getBoolean("companion.auto-follow", true);
+        autoFollow = config.getBoolean("companion.auto-follow", false);
         followDistance = Math.max(1.0, config.getDouble("companion.follow-distance", 3.0));
         removeOnQuit = config.getBoolean("companion.remove-on-quit", false);
         saveOnRemove = config.getBoolean("companion.save-on-remove", true);
@@ -277,14 +276,6 @@ public final class PluginSettings {
             }
         }
         return Collections.unmodifiableSet(result);
-    }
-
-    private static String trimTrailingSlash(String value) {
-        String result = value == null || value.isBlank() ? "https://api.deepseek.com" : value.trim();
-        while (result.endsWith("/")) {
-            result = result.substring(0, result.length() - 1);
-        }
-        return result;
     }
 
     public String apiKey() {

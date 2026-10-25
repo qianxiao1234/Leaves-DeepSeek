@@ -3,6 +3,7 @@ package com.leavesdeepseek.buddy.command;
 import com.google.gson.JsonObject;
 import com.leavesdeepseek.buddy.LeavesDeepSeekPlugin;
 import com.leavesdeepseek.buddy.ai.AiBackend;
+import com.leavesdeepseek.buddy.ai.AiDefaults;
 import com.leavesdeepseek.buddy.ai.ApiConfig;
 import com.leavesdeepseek.buddy.ai.AstrBotConfig;
 import com.leavesdeepseek.buddy.ai.ResolvedAi;
@@ -35,8 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class BuddyCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUB_COMMANDS = List.of(
-            "help", "set", "spawn", "remove", "list", "come", "follow", "stay", "listen", "sleep",
-            "eat", "persona", "astrbot", "ai", "global", "say", "task", "stop", "status", "reload", "debug");
+            "help", "status", "bot", "move", "do", "ai", "astrbot", "global", "reload", "debug");
 
     private final LeavesDeepSeekPlugin plugin;
     private final Map<UUID, Long> cooldowns = new ConcurrentHashMap<>();
@@ -52,57 +52,131 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         switch (args[0].toLowerCase(Locale.ROOT)) {
-            case "set" -> set(sender, args);
-            case "spawn" -> spawn(sender, args);
-            case "remove" -> remove(sender, args);
-            case "list" -> list(sender);
-            case "come" -> come(sender);
-            case "follow" -> follow(sender);
-            case "stay" -> stay(sender);
-            case "listen" -> listen(sender, args);
-            case "sleep" -> sleep(sender);
-            case "eat" -> eat(sender, args);
-            case "persona" -> persona(sender, args);
-            case "astrbot" -> astrBot(sender, args);
-            case "ai" -> ai(sender, args);
-            case "global" -> global(sender, args);
-            case "say" -> say(sender, args);
-            case "task", "chat" -> task(sender, args);
-            case "stop" -> stop(sender);
+            case "help" -> help(sender, label);
             case "status" -> status(sender);
             case "reload" -> reload(sender);
             case "debug" -> debug(sender, args);
+            case "bot" -> botGroup(sender, args, label);
+            case "move" -> moveGroup(sender, args, label);
+            case "do" -> doGroup(sender, args, label);
+            case "ai" -> aiGroup(sender, args, label);
+            // astrbot / global 的分类内部自己带子命令，保持原样
+            case "astrbot" -> astrBot(sender, args);
+            case "global" -> global(sender, args);
             default -> {
-                Text.send(sender, "§c未知子命令：" + args[0]);
-                help(sender, label);
+                Text.send(sender, "§c未知子命令：" + args[0] + "§7（用 §f/" + label + " help§7 看全部）");
             }
         }
         return true;
     }
 
+    /** 去掉分组名，保留「组内子命令 + 参数」。 */
+    private static String[] inner(String[] args) {
+        return Arrays.copyOfRange(args, 1, args.length);
+    }
+
+    private void botGroup(CommandSender sender, String[] args, String label) {
+        if (args.length < 2) {
+            Text.send(sender, "§7用法：§f/" + label + " bot <spawn|remove|list|revive|info>");
+            return;
+        }
+        String[] sub = inner(args);
+        switch (sub[0].toLowerCase(Locale.ROOT)) {
+            case "spawn" -> spawn(sender, sub);
+            case "remove" -> remove(sender, sub);
+            case "list" -> list(sender);
+            case "revive" -> revive(sender);
+            case "info", "status" -> status(sender);
+            default -> Text.send(sender, "§c用法：§f/" + label + " bot <spawn|remove|list|revive|info>");
+        }
+    }
+
+    private void moveGroup(CommandSender sender, String[] args, String label) {
+        if (args.length < 2) {
+            Text.send(sender, "§7用法：§f/" + label + " move <follow|come|stay|stop|sleep>");
+            return;
+        }
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "follow" -> follow(sender);
+            case "come" -> come(sender);
+            case "stay" -> stay(sender);
+            case "stop" -> stop(sender);
+            case "sleep" -> sleep(sender);
+            default -> Text.send(sender, "§c用法：§f/" + label + " move <follow|come|stay|stop|sleep>");
+        }
+    }
+
+    private void doGroup(CommandSender sender, String[] args, String label) {
+        if (args.length < 2) {
+            Text.send(sender, "§7用法：§f/" + label + " do <eat|say|task|listen>");
+            return;
+        }
+        String[] sub = inner(args);
+        switch (sub[0].toLowerCase(Locale.ROOT)) {
+            case "eat" -> eat(sender, sub);
+            case "say" -> say(sender, sub);
+            case "task", "chat" -> task(sender, sub);
+            case "listen" -> listen(sender, sub);
+            default -> Text.send(sender, "§c用法：§f/" + label + " do <eat|say|task|listen>");
+        }
+    }
+
+    private void aiGroup(CommandSender sender, String[] args, String label) {
+        if (args.length < 2) {
+            Player player = asPlayer(sender);
+            if (player != null) {
+                aiStatus(player);
+            }
+            return;
+        }
+        String[] sub = inner(args);
+        switch (sub[0].toLowerCase(Locale.ROOT)) {
+            case "set" -> set(sender, sub);
+            case "clean" -> clean(sender);
+            case "backend", "use" -> aiBackend(sender, sub);
+            case "status", "info" -> {
+                Player player = asPlayer(sender);
+                if (player != null) {
+                    aiStatus(player);
+                }
+            }
+            case "persona" -> persona(sender, sub);
+            default -> Text.send(sender, "§c用法：§f/" + label
+                    + " ai <set|clean|backend|status|persona>");
+        }
+    }
+
     private void help(CommandSender sender, String label) {
         Text.send(sender, "§8§m----------§r §bLeavesDeepSeek §8§m----------");
-        Text.send(sender, "§f/" + label + " set <apikey> [model] [base-url] §7- 配置并验证你自己的 API Key");
-        Text.send(sender, "§f/" + label + " spawn [名字] [皮肤名] §7- 创建你的 AI 伙伴假人");
-        Text.send(sender, "§f/" + label + " remove [名字] §7- 移除伙伴");
-        Text.send(sender, "§f/" + label + " list §7- 查看自己的伙伴");
-        Text.send(sender, "§f/" + label + " task <要做的事> §7- 用自然语言指挥伙伴（核心功能）");
-        Text.send(sender, "§f/" + label + " say <内容> §7- 让伙伴说话");
-        Text.send(sender, "§f/" + label + " come §7- 让伙伴过来");
-        Text.send(sender, "§f/" + label + " follow §7- 让伙伴跟随你");
-        Text.send(sender, "§f/" + label + " stay §7- 让伙伴停下");
-        Text.send(sender, "§f/" + label + " listen [on|off] §7- 切换是否直接接管你的聊天");
-        Text.send(sender, "§f/" + label + " sleep §7- 找到附近的床并睡觉");
-        Text.send(sender, "§f/" + label + " eat [食物] §7- 让伙伴吃东西（主人命令视为同意）");
-        Text.send(sender, "§f/" + label + " persona [set <描述>|reset] §7- 设置伙伴的人格与说话风格");
-        Text.send(sender, "§f/" + label + " astrbot set <base-url> <api-key> [session-mode] §7- 对接你自己的 AstrBot");
-        Text.send(sender, "§f/" + label + " ai set <default|astrbot|auto> §7- 选择默认使用的 AI 后端");
-        Text.send(sender, "§f/" + label + " global set <apikey> [model] [base-url] §7- 配置服务器全局 DeepSeek Key");
-        Text.send(sender, "§f/" + label + " global <reload|ai|astrbot|debug> §7- 修改其他全局配置（管理员）");
-        Text.send(sender, "§f/" + label + " astrbot say <内容> §7- 向 AstrBot 提问并回复到聊天框");
-        Text.send(sender, "§f/" + label + " stop §7- 停止伙伴的所有动作");
+        Text.send(sender, "§b【假人】");
+        Text.send(sender, "§f/" + label + " bot spawn [名字] [皮肤名] §7- 创建你的 AI 伙伴假人");
+        Text.send(sender, "§f/" + label + " bot remove [名字] §7- 移除伙伴");
+        Text.send(sender, "§f/" + label + " bot list §7- 查看自己的伙伴");
+        Text.send(sender, "§f/" + label + " bot revive §7- 把倒下的伙伴救起来（物品一件不丢）");
+        Text.send(sender, "§f/" + label + " bot info §7- 查看伙伴状态");
+        Text.send(sender, "§b【移动】");
+        Text.send(sender, "§f/" + label + " move follow §7- 持续跟随你");
+        Text.send(sender, "§f/" + label + " move come §7- 过来一下");
+        Text.send(sender, "§f/" + label + " move stay §7- 原地待命（关闭跟随）");
+        Text.send(sender, "§f/" + label + " move stop §7- 停止全部动作并关闭跟随");
+        Text.send(sender, "§f/" + label + " move sleep §7- 找附近的床睡觉");
+        Text.send(sender, "§b【做事】");
+        Text.send(sender, "§f/" + label + " do task <要做的事> §7- 用自然语言指挥伙伴（核心功能）");
+        Text.send(sender, "§f/" + label + " do say <内容> §7- 让伙伴说话");
+        Text.send(sender, "§f/" + label + " do eat [食物] §7- 让伙伴吃东西（主人命令视为同意）");
+        Text.send(sender, "§f/" + label + " do listen [on|off] §7- 切换是否直接接管你的聊天");
+        Text.send(sender, "§b【AI】");
+        Text.send(sender, "§f/" + label + " ai set <apikey> [model] [base-url] §7- 配置并验证你自己的 API Key");
+        Text.send(sender, "§f/" + label + " ai clean §7- 清空你自己的 Key/模型/地址（恢复默认值）");
+        Text.send(sender, "§f/" + label + " ai backend <auto|deepseek|astrbot> §7- 选择默认使用的 AI 后端");
+        Text.send(sender, "§f/" + label + " ai status §7- 查看 AI 配置与最近错误");
+        Text.send(sender, "§f/" + label + " ai persona [set <描述>|show|reset] §7- 设置人格与说话风格");
+        Text.send(sender, "§f/" + label + " astrbot <set|on|off|test|status|session|clear|say> §7- 对接你自己的 AstrBot");
+        Text.send(sender, "§b【管理员】");
+        Text.send(sender, "§f/" + label + " global <set|clean|ai|astrbot|reload|debug> §7- 修改服务器全局配置");
+        Text.send(sender, "§f/" + label + " reload §7- 重载配置");
+        Text.send(sender, "§f/" + label + " debug <on|off> §7- 调试日志开关");
         Text.send(sender, "§f/" + label + " status §7- 查看伙伴状态");
-        Text.send(sender, "§f/" + label + " reload §7- 重载配置（管理员）");
         Text.send(sender, "§7也可以直接使用聊天前缀，例如：§f@ 帮我砍三根木头");
     }
 
@@ -117,7 +191,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         }
         if (plugin.bots().countOf(player) >= plugin.settings().maxPerPlayer()) {
             Text.send(player, "§e你已经有 " + plugin.settings().maxPerPlayer()
-                    + " 个伙伴了，可以先用 §f/buddy remove §e移除一个。");
+                    + " 个伙伴了，可以先用 §f/buddy bot remove §e移除一个。");
             return;
         }
 
@@ -127,13 +201,13 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             // 没有 AI 也能创建假人：跟随/过来/待命/睡觉/吃东西/看状态这些命令都不需要大模型
             if (resolved.needsChoice()) {
                 Text.send(player, "§e你同时配置了 DeepSeek 和 AstrBot，聊天前需要先选一个默认后端：");
-                Text.send(player, "§f/buddy ai set default §7- 使用 DeepSeek（可操作假人）");
-                Text.send(player, "§f/buddy ai set astrbot §7- 使用 AstrBot（纯聊天）");
+                Text.send(player, "§f/buddy ai backend deepseek §7- 使用 DeepSeek（可操作假人）");
+                Text.send(player, "§f/buddy ai backend astrbot §7- 使用 AstrBot（纯聊天）");
             } else {
                 Text.send(player, "§e注意：你还没有可用的 AI，假人照样能创建，只是暂时只能用命令控制：");
-                Text.send(player, "§7  §f/buddy follow §7跟随 | §f/buddy come §7过来 | §f/buddy stay §7待命");
-                Text.send(player, "§7  §f/buddy sleep §7睡觉 | §f/buddy eat §7吃东西 | §f/buddy status §7看状态");
-                Text.send(player, "§7想让它听懂自然语言、自己动手：§f/buddy set <apikey> [model] [base-url]");
+                Text.send(player, "§7  §f/buddy move follow §7跟随 | §f/buddy move come §7过来 | §f/buddy move stay §7待命");
+                Text.send(player, "§7  §f/buddy move sleep §7睡觉 | §f/buddy do eat §7吃东西 | §f/buddy status §7看状态");
+                Text.send(player, "§7想让它听懂自然语言、自己动手：§f/buddy ai set <apikey> [model] [base-url]");
                 Text.send(player, "§7（或者让服主用 §f/buddy global set <apikey>§7 配一个全局 Key）");
             }
         } else if (!resolved.astrBot() && !resolved.validated()) {
@@ -171,10 +245,10 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                     }
                     Text.send(player, "§a伙伴 §f" + BotNames.rawName(bot) + " §a已上线！");
                     if (aiReady) {
-                        Text.send(player, "§7直接聊天就能指挥我；想暂时关掉直听用 §f/buddy listen off§7。");
+                        Text.send(player, "§7直接聊天就能指挥我；想暂时关掉直听用 §f/buddy do listen off§7。");
                     } else {
-                        Text.send(player, "§7目前还不能听懂聊天（没有 AI），请用 §f/buddy follow §7/"
-                                + " §f/buddy come §7/ §f/buddy stay §7等命令。");
+                        Text.send(player, "§7目前还不能听懂聊天（没有 AI），请用 §f/buddy move follow §7/"
+                                + " §f/buddy move come §7/ §f/buddy move stay §7等命令。");
                     }
                     if (plugin.profiles().autoFollow(player)) {
                         plugin.navigator().follow(bot, player, plugin.settings().followDistance());
@@ -188,7 +262,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         if (args.length < 2) {
-            Text.send(player, "§7用法：§f/buddy set <apikey> [model] [base-url]");
+            Text.send(player, "§7用法：§f/buddy ai set <apikey> [model] [base-url]");
             Text.send(player, "§7不填 model / base-url，或填 §fdefault§7，表示使用服务器默认值。");
             Text.send(player, "§7如果要填 base-url，必须同时填 model。");
             return;
@@ -204,7 +278,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
 
         if (args.length == 3 && looksLikeUrl(model)) {
             Text.send(player, "§c如果填写 base-url，必须同时填写 model：");
-            Text.send(player, "§f/buddy set <apikey> <model> <base-url>");
+            Text.send(player, "§f/buddy ai set <apikey> <model> <base-url>");
             return;
         }
         if (!PlayerProfiles.isDefault(baseUrl) && PlayerProfiles.isDefault(model)) {
@@ -236,22 +310,90 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                     if (error != null) {
                         plugin.profiles().markValidated(profile, false);
                         Text.send(player, "§c验证失败：" + Json.rootMessage(error));
-                        Text.send(player, "§7Key 已保存但标记为无效，修正后重新执行 /buddy set。");
+                        Text.send(player, "§7Key 已保存但标记为无效，修正后重新执行 /buddy ai set。");
                         return;
                     }
                     plugin.profiles().markValidated(profile, true);
                     Text.send(player, "§aAPI Key 验证通过！模型：§f" + api.model()
                             + " §7地址：§f" + api.baseUrl());
-                    Text.send(player, "§7现在可以使用 §f/buddy spawn §7创建你的伙伴。");
+                    Text.send(player, "§7现在可以使用 §f/buddy bot spawn §7创建你的伙伴。");
                     if (plugin.ai().astrBotAvailable(player)) {
                         Text.send(player, "§e你现在同时可用 DeepSeek 和 AstrBot："
-                                + "用 §f/buddy ai set default|astrbot §e选择默认模型。");
+                                + "用 §f/buddy ai backend deepseek|astrbot §e选择默认模型。");
                     }
                 }));
     }
 
     private boolean looksLikeUrl(String value) {
         return value != null && (value.startsWith("http://") || value.startsWith("https://"));
+    }
+
+    /**
+     * /buddy ai clean：清空玩家自己的 DeepSeek Key / 模型 / 地址，并恢复默认值。
+     * <p>默认值：Key 为空、模型 {@code deepseek-chat}、地址 {@code https://api.deepseek.com}。
+     * 清理后玩家的下一次请求会使用服务器全局 Key（如果服主配置了）。</p>
+     */
+    private void clean(CommandSender sender) {
+        Player player = asPlayer(sender);
+        if (player == null) {
+            return;
+        }
+        PlayerProfile profile = plugin.profiles().getOrCreate(player);
+        boolean hadKey = profile.getApiKey() != null && !profile.getApiKey().isBlank();
+        boolean hadCustom = !PlayerProfiles.isDefault(profile.getModel())
+                || !PlayerProfiles.isDefault(profile.getBaseUrl());
+        profile.setApiKey(AiDefaults.API_KEY);
+        profile.setModel(AiDefaults.MODEL);
+        profile.setBaseUrl(AiDefaults.BASE_URL);
+        profile.setValidated(false);
+        profile.setValidatedAt(0L);
+        plugin.profiles().save(profile);
+        plugin.log().info("配置", player.getName() + " 清空了个人的 DeepSeek 配置（恢复默认值）");
+        Text.send(player, "§a已清空你自己的 DeepSeek 配置：");
+        Text.send(player, "§7  API Key：§f空 §7| 模型：§f" + AiDefaults.MODEL
+                + " §7| 地址：§f" + AiDefaults.BASE_URL);
+        if (hadKey || hadCustom) {
+            Text.send(player, "§7旧的 Key / 模型 / 地址已删除，不会再被使用。");
+        }
+        if (plugin.settings().useGlobalConfig() && plugin.ai().globalApi() != null) {
+            Text.send(player, "§7没有个人 Key 时会自动使用服主配置的全局 Key。");
+        } else {
+            Text.send(player, "§7需要用时重新执行 §f/buddy ai set <apikey> [model] [base-url]§7。");
+        }
+    }
+
+    /**
+     * /buddy bot revive：把倒下的伙伴救起来；假人不在线时尝试从存档重新生成。
+     */
+    private void revive(CommandSender sender) {
+        Player player = asPlayer(sender);
+        if (player == null) {
+            return;
+        }
+        Bot bot = plugin.bots().primaryBot(player);
+        if (bot == null) {
+            if (plugin.botStates() != null && plugin.botStates().hasState(player.getUniqueId())) {
+                Text.send(player, "§7正在从存档唤醒你的伙伴……");
+                if (!plugin.revivePrimary(player)) {
+                    Text.send(player, "§c没能从存档唤醒伙伴，请检查数据目录或重新创建。");
+                }
+            } else {
+                Text.send(player, "§e你还没有伙伴，用 §f/buddy bot spawn§e 创建一个。");
+            }
+            return;
+        }
+        if (!plugin.bots().isDowned(bot) && !bot.isDead()) {
+            Text.send(player, "§7" + BotNames.rawName(bot) + " 好好的，不需要复活。");
+            return;
+        }
+        if (!plugin.reviveBot(bot, player)) {
+            Text.send(player, "§c没能复活伙伴，请稍后再试。");
+            return;
+        }
+        Text.send(player, "§a" + BotNames.rawName(bot) + " 已经站起来了（物品一件没少）。");
+        if (plugin.settings().speakInChat() && bot.isValid()) {
+            bot.chat("我又站起来了！");
+        }
     }
 
     private void remove(CommandSender sender, String[] args) {
@@ -275,7 +417,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         } else {
             bot = plugin.bots().primaryBot(player);
             if (bot == null) {
-                Text.send(player, "§e你还没有伙伴，先用 §f/buddy spawn §e创建一个吧。");
+                Text.send(player, "§e你还没有伙伴，先用 §f/buddy bot spawn §e创建一个吧。");
                 return;
             }
         }
@@ -285,7 +427,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         String botName = BotNames.rawName(bot);
         boolean removed = plugin.bots().remove(bot, plugin.settings().saveOnRemove());
         if (removed && ownerId != null && plugin.botStates() != null) {
-            // 只有明确执行 /buddy remove 才删除存档；服务端停机时的移除不会删
+            // 只有明确执行 /buddy bot remove 才删除存档；服务端停机时的移除不会删
             plugin.botStates().delete(ownerId);
             plugin.getLogger().info("[伙伴] 已删除假人存档：" + botName + "（主人 " + ownerId + "）");
         }
@@ -300,7 +442,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         }
         List<Bot> bots = plugin.bots().botsOf(player);
         if (bots.isEmpty()) {
-            Text.send(player, "§e你还没有伙伴，使用 §f/buddy spawn §e创建一个。");
+            Text.send(player, "§e你还没有伙伴，使用 §f/buddy bot spawn §e创建一个。");
             return;
         }
         Text.send(player, "§7你的伙伴：");
@@ -315,14 +457,14 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         Bot bot = requireBot(player);
-        if (bot == null) {
+        if (bot == null || blockedByDowned(player, bot)) {
             return;
         }
         Text.send(player, "§7我正在过来……");
         plugin.navigator().navigateAndWait(bot, player.getLocation(), 2.0, 400)
                 .whenComplete((arrived, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
                     if (error != null) {
-                        plugin.log().error("命令", "/buddy come 导航异常", error);
+                        plugin.log().error("命令", "/buddy move come 导航异常", error);
                         Text.send(player, "§c过来的时候出错了：" + Json.rootMessage(error));
                         return;
                     }
@@ -336,12 +478,16 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         Bot bot = requireBot(player);
-        if (bot == null) {
+        if (bot == null || blockedByDowned(player, bot)) {
             return;
         }
-        plugin.botActions().interrupt(bot, "主人用命令让你跟上");
-        plugin.navigator().forceFollow(bot, player, plugin.settings().followDistance());
-        Text.send(player, "§a我会跟着你的。");
+        boolean started = plugin.followBot(bot, player, "主人用命令让你跟上");
+        String reason = started ? null : plugin.followDeferReason(bot);
+        Text.send(player, started
+                ? "§a我会跟着你的。"
+                : ("creeper".equals(reason)
+                        ? "§e有苦力怕，我先跑开，安全后马上跟上。"
+                        : "§e我先把这口吃的咽下去，马上跟上。"));
     }
 
     private void stay(CommandSender sender) {
@@ -364,7 +510,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         Bot bot = requireBot(player);
-        if (bot == null) {
+        if (bot == null || blockedByDowned(player, bot)) {
             return;
         }
         org.bukkit.block.Block bed = plugin.botActions().findNearestBed(bot, 16);
@@ -375,7 +521,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         Text.send(player, "§7我去找床睡觉……");
         plugin.botActions().sleepInBed(bot, bed).whenComplete((result, error) -> {
             if (error != null) {
-                plugin.log().error("命令", "/buddy sleep 异常", error);
+                plugin.log().error("命令", "/buddy move sleep 异常", error);
                 Bukkit.getScheduler().runTask(plugin, () ->
                         Text.send(player, "§c睡觉时出错了：" + Json.rootMessage(error)));
                 return;
@@ -392,7 +538,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         Bot bot = requireBot(player);
-        if (bot == null) {
+        if (bot == null || blockedByDowned(player, bot)) {
             return;
         }
         Material material = null;
@@ -406,7 +552,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         Text.send(player, "§7让他吃点东西……");
         plugin.botActions().eat(bot, material, true).whenComplete((result, error) -> {
             if (error != null) {
-                plugin.log().error("命令", "/buddy eat 异常", error);
+                plugin.log().error("命令", "/buddy do eat 异常", error);
                 Bukkit.getScheduler().runTask(plugin, () ->
                         Text.send(player, "§c吃东西出错了：" + Json.rootMessage(error)));
                 return;
@@ -430,7 +576,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             } else {
                 Text.send(player, "§7当前人格（" + (custom ? "个人" : "全局默认") + "）：§f" + text);
             }
-            Text.send(player, "§7设置：§f/buddy persona set <人格描述> §7| 清除：§f/buddy persona reset");
+            Text.send(player, "§7设置：§f/buddy ai persona set <人格描述> §7| 清除：§f/buddy ai persona reset");
             return;
         }
         String action = args[1].toLowerCase(Locale.ROOT);
@@ -442,7 +588,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         String text;
         if (action.equals("set")) {
             if (args.length < 3) {
-                Text.send(player, "§7用法：§f/buddy persona set <人格描述>");
+                Text.send(player, "§7用法：§f/buddy ai persona set <人格描述>");
                 return;
             }
             text = String.join(" ", Arrays.copyOfRange(args, 2, args.length));
@@ -460,7 +606,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         if (args.length >= 2 && args[1].equalsIgnoreCase("set") && args.length < 3) {
-            Text.send(player, "§7用法：§f/buddy ai set <default|astrbot|auto>");
+            Text.send(player, "§7用法：§f/buddy ai backend <deepseek|astrbot|auto>");
             Text.send(player, "§7default = DeepSeek（可操作假人），astrbot = 纯聊天，auto = 自动");
             return;
         }
@@ -473,7 +619,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                 default -> null;
             };
             if (backend == null) {
-                Text.send(player, "§c用法：§f/buddy ai set <default|astrbot|auto>");
+                Text.send(player, "§c用法：§f/buddy ai backend <deepseek|astrbot|auto>");
                 return;
             }
             plugin.ai().setPreference(player, backend);
@@ -503,6 +649,18 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         aiStatus(player);
     }
 
+    /**
+     * {@code /buddy ai backend <auto|deepseek|astrbot>}：选择默认后端。
+     */
+    private void aiBackend(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            Text.send(sender, "§7用法：§f/buddy ai backend <auto|deepseek|astrbot>");
+            Text.send(sender, "§7deepseek = 可操作假人，astrbot = 纯聊天，auto = 自动选择");
+            return;
+        }
+        ai(sender, new String[]{"ai", "set", args[1]});
+    }
+
     private void aiStatus(Player player) {
         ResolvedAi resolved = plugin.ai().resolve(player);
         ApiConfig own = plugin.ai().ownApi(plugin.profiles().getOrCreate(player));
@@ -521,7 +679,9 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                     + " §7" + (resolved.validated() ? "§a已验证" : "§e未验证"));
             Text.send(player, "§8  地址：" + plugin.client().endpointOf(global));
         } else {
-            Text.send(player, "§7DeepSeek：§c未配置 §8（/buddy set <apikey>）");
+            Text.send(player, "§7DeepSeek：§c未配置 §8（/buddy ai set <apikey>）");
+            Text.send(player, "§8  默认模型 §f" + AiDefaults.MODEL
+                    + " §8默认地址 §f" + AiDefaults.BASE_URL);
         }
         Text.send(player, "§7AstrBot：§f" + (astrUsable ? "可用" : "不可用")
                 + (astr != null && astrUsable
@@ -534,8 +694,8 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             Text.send(player, "§e" + resolved.reason());
         }
         if (resolved.needsChoice()) {
-            Text.send(player, "§f/buddy ai set default §7（DeepSeek，可操作假人）");
-            Text.send(player, "§f/buddy ai set astrbot §7（AstrBot，纯聊天）");
+            Text.send(player, "§f/buddy ai backend deepseek §7（DeepSeek，可操作假人）");
+            Text.send(player, "§f/buddy ai backend astrbot §7（AstrBot，纯聊天）");
         }
         String lastError = plugin.client().lastError();
         if (lastError != null && !lastError.isBlank()) {
@@ -547,9 +707,9 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         }
         if (!resolved.usable()) {
             Text.send(player, "§7提示：没有 AI 也可以创建假人，"
-                    + "用 §f/buddy follow|come|stay|sleep|eat|status §7等命令操作它。");
+                    + "用 §f/buddy move follow §7、§f/buddy do eat §7、§f/buddy status §7等命令操作它。");
         }
-        Text.send(player, "§7切换：§f/buddy ai set <default|astrbot|auto>");
+        Text.send(player, "§7切换：§f/buddy ai backend <deepseek|astrbot|auto>");
     }
 
     private static String backendLabel(String backend) {
@@ -779,8 +939,9 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             case "ai" -> globalAi(sender, args);
             case "astrbot" -> globalAstrBot(sender, args);
             case "set" -> globalSet(sender, args);
+            case "clean" -> globalClean(sender);
             default -> {
-                Text.send(sender, "§c用法：§f/buddy global <set|reload|debug|ai|astrbot>");
+                Text.send(sender, "§c用法：§f/buddy global <set|clean|reload|debug|ai|astrbot>");
                 Text.send(sender, "§7全局配置只能通过 /buddy global 修改，玩家个人设置请用 /buddy astrbot、/buddy ai。");
             }
         }
@@ -798,12 +959,15 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                 : deepSeek.maskedKey() + " §7" + (plugin.ai().isGlobalValidated(deepSeek) ? "§a已验证" : "§e未验证")));
         if (deepSeek != null) {
             Text.send(sender, "§7  模型：§f" + deepSeek.model() + " §7地址：§f" + plugin.client().endpointOf(deepSeek));
+        } else {
+            Text.send(sender, "§7  默认模型：§f" + plugin.settings().model()
+                    + " §7默认地址：§f" + plugin.settings().baseUrl());
         }
         Text.send(sender, "§7AstrBot 默认：§f" + (config.usable() ? "可用" : "不可用"));
         Text.send(sender, "§7地址：§f" + config.baseUrl()
                 + " §7Key：§f" + config.maskedKey()
                 + " §7会话：§f" + config.mode());
-        Text.send(sender, "§7修改：§f/buddy global set <apikey> [model] [base-url] §7| §f/buddy global set clear");
+        Text.send(sender, "§7修改：§f/buddy global set <apikey> [model] [base-url] §7| §f/buddy global clean");
         Text.send(sender, "§7       §f/buddy global astrbot set <base-url> <api-key> [session-mode]");
         Text.send(sender, "§7       §f/buddy global ai set <auto|deepseek|astrbot>");
         Text.send(sender, "§7       §f/buddy global debug on|off §7| §f/buddy global reload");
@@ -813,29 +977,24 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
     /**
      * 设置服务器全局 DeepSeek Key：写进插件根目录 config.yml 的 deepseek.*，
      * 只允许管理员通过 /buddy global 修改。
-     * <p>用法：/buddy global set &lt;apikey&gt; [model] [base-url]，/buddy global set clear 清除。</p>
+     * <p>用法：/buddy global set &lt;apikey&gt; [model] [base-url]，/buddy global clean 恢复默认。</p>
      */
     private void globalSet(CommandSender sender, String[] args) {
         if (args.length < 3) {
             Text.send(sender, "§7用法：§f/buddy global set <apikey> [model] [base-url]");
             Text.send(sender, "§7model / base-url 不填或填 §fdefault§7，表示沿用 config.yml 里现有的 deepseek.* 值。");
             Text.send(sender, "§7填写 base-url 时必须同时填写 model。");
-            Text.send(sender, "§7清除全局 Key：§f/buddy global set clear");
+            Text.send(sender, "§7清空并恢复默认：§f/buddy global clean");
             return;
         }
 
         String key = args[2].trim();
         if (key.equalsIgnoreCase("clear") || key.equalsIgnoreCase("none")) {
-            plugin.getConfig().set("deepseek.api-key", "");
-            plugin.saveConfig();
-            plugin.ai().clearGlobalValidation();
-            plugin.reloadPlugin();
-            plugin.log().info("配置", "管理员 " + sender.getName() + " 清除了服务器全局 DeepSeek Key");
-            Text.send(sender, "§a已清除服务器全局 DeepSeek Key，玩家需要用自己的 Key（/buddy set）。");
+            globalClean(sender);
             return;
         }
         if (key.isEmpty() || key.equalsIgnoreCase("default")) {
-            Text.send(sender, "§cAPI Key 不能为空（要清除请用 §f/buddy global set clear§c）。");
+            Text.send(sender, "§cAPI Key 不能为空（要清除请用 §f/buddy global clean§c）。");
             return;
         }
 
@@ -903,6 +1062,24 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                             + " §7地址：§f" + api.baseUrl());
                     Text.send(sender, "§7没有个人 Key 的玩家现在会自动使用它（§f/buddy global§7 可查看）。");
                 }));
+    }
+
+    /**
+     * 清空服务器全局 DeepSeek 配置并恢复默认值：
+     * Key 为空、模型 {@code deepseek-chat}、地址 {@code https://api.deepseek.com}。
+     */
+    private void globalClean(CommandSender sender) {
+        plugin.getConfig().set("deepseek.api-key", AiDefaults.API_KEY);
+        plugin.getConfig().set("deepseek.model", AiDefaults.MODEL);
+        plugin.getConfig().set("deepseek.base-url", AiDefaults.BASE_URL);
+        plugin.saveConfig();
+        plugin.ai().clearGlobalValidation();
+        plugin.reloadPlugin();
+        plugin.log().info("配置", "管理员 " + sender.getName() + " 清空了服务器全局 DeepSeek 配置（恢复默认值）");
+        Text.send(sender, "§a已清空服务器全局 DeepSeek 配置：");
+        Text.send(sender, "§7  API Key：§f空 §7| 模型：§f" + AiDefaults.MODEL
+                + " §7| 地址：§f" + AiDefaults.BASE_URL);
+        Text.send(sender, "§7没有个人 Key 的玩家需要自己执行 §f/buddy ai set <apikey>§7。");
     }
 
     private void globalDebug(CommandSender sender, String[] args) {
@@ -1095,7 +1272,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             String value = args[1].toLowerCase(Locale.ROOT);
             if (value.equals("on") || value.equals("true")) {
                 plugin.chatListener().setListening(player, true);
-                Text.send(player, "§a现在你直接说话，我就会收到（不需要 /buddy task 或 @）。");
+                Text.send(player, "§a现在你直接说话，我就会收到（不需要 /buddy do task 或 @）。");
                 return;
             }
             if (value.equals("off") || value.equals("false")) {
@@ -1106,7 +1283,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         }
         boolean listening = plugin.chatListener().isListening(player);
         Text.send(player, "§7当前聊天模式：§f" + (listening ? "直听（说每句话都会发给伙伴）" : "仅 @ 触发"));
-        Text.send(player, "§7切换：§f/buddy listen on §7或 §f/buddy listen off");
+        Text.send(player, "§7切换：§f/buddy do listen on §7或 §f/buddy do listen off");
     }
 
     private void say(CommandSender sender, String[] args) {
@@ -1119,7 +1296,7 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         if (args.length < 2) {
-            Text.send(player, "§7用法：§f/buddy say <内容>");
+            Text.send(player, "§7用法：§f/buddy do say <内容>");
             return;
         }
         String text = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
@@ -1139,11 +1316,11 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
             return;
         }
         Bot bot = requireBot(player);
-        if (bot == null) {
+        if (bot == null || blockedByDowned(player, bot)) {
             return;
         }
         if (args.length < 2) {
-            Text.send(player, "§7用法：§f/buddy task <要做的事>");
+            Text.send(player, "§7用法：§f/buddy do task <要做的事>");
             return;
         }
 
@@ -1191,8 +1368,8 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
         if (bot == null) {
             return;
         }
-        plugin.stopBot(bot, "主人用 /buddy stop 停止了所有动作");
-        Text.send(player, "§7已经停下，跟随也关了（想让它再跟上：说「跟着我」或 §f/buddy follow§7）。");
+        plugin.stopBot(bot, "主人用 /buddy move stop 停止了所有动作");
+        Text.send(player, "§7已经停下，跟随也关了（想让它再跟上：说「跟着我」或 §f/buddy move follow§7）。");
     }
 
     private void status(CommandSender sender) {
@@ -1213,8 +1390,11 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
                 + " §7距离主人：§f" + Json.getDouble(state, "owner_distance", 0));
         Text.send(player, "§7主手：§f" + Json.getString(state, "held_item", "empty"));
         Text.send(player, "§7动作：§f" + plugin.bots().actionNames(bot));
+        if (plugin.bots().isDowned(bot)) {
+            Text.send(player, "§c状态：§f倒地（物品已保留，说「复活」或 §f/buddy bot revive§c）");
+        }
         Text.send(player, "§7跟随：§f" + (plugin.navigator().isFollowDisabled(bot)
-                ? "§7已关闭（说「跟着我」或 /buddy follow 重新开启）"
+                ? "§7已关闭（说「跟着我」或 /buddy move follow 重新开启）"
                 : (plugin.navigator().isFollowing(bot) ? "§a开启" : "§7未开启")));
         ResolvedAi stateAi = plugin.ai().resolve(player);
         Text.send(player, "§7AI 后端：§f" + stateAi.backend().label()
@@ -1277,77 +1457,127 @@ public final class BuddyCommand implements CommandExecutor, TabCompleter {
     private Bot requireBot(Player player) {
         Bot bot = plugin.bots().primaryBot(player);
         if (bot == null) {
-            Text.send(player, "§e你还没有伙伴，先用 §f/buddy spawn §e创建一个。");
+            Text.send(player, "§e你还没有伙伴，先用 §f/buddy bot spawn §e创建一个。");
         }
         return bot;
+    }
+
+    /**
+     * 倒地的伙伴不能执行动作，只提示主人先复活。
+     */
+    private boolean blockedByDowned(Player player, Bot bot) {
+        if (bot != null && plugin.bots().isDowned(bot)) {
+            Text.send(player, "§c" + BotNames.rawName(bot)
+                    + " 倒下了，先说「复活」或执行 §f/buddy bot revive§c 把他救起来。");
+            return true;
+        }
+        return false;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            List<String> result = new ArrayList<>();
-            for (String sub : SUB_COMMANDS) {
-                if (sub.startsWith(args[0].toLowerCase(Locale.ROOT))) {
-                    result.add(sub);
+            return prefix(SUB_COMMANDS, args[0]);
+        }
+        String group = args[0].toLowerCase(Locale.ROOT);
+        if (args.length == 2) {
+            switch (group) {
+                case "bot" -> {
+                    return prefix(List.of("spawn", "remove", "list", "revive", "info"), args[1]);
+                }
+                case "move" -> {
+                    return prefix(List.of("follow", "come", "stay", "stop", "sleep"), args[1]);
+                }
+                case "do" -> {
+                    return prefix(List.of("task", "say", "eat", "listen"), args[1]);
+                }
+                case "ai" -> {
+                    return prefix(List.of("set", "clean", "backend", "status", "persona"), args[1]);
+                }
+                case "astrbot" -> {
+                    return prefix(List.of("set", "on", "off", "test", "status", "session", "clear", "say"), args[1]);
+                }
+                case "global" -> {
+                    return prefix(List.of("set", "clean", "reload", "debug", "ai", "astrbot"), args[1]);
+                }
+                case "debug" -> {
+                    return prefix(List.of("on", "off"), args[1]);
+                }
+                default -> {
+                    return List.of();
                 }
             }
-            return result;
         }
-        if (args.length == 2 && args[0].equalsIgnoreCase("remove") && sender instanceof Player player) {
+        if (group.equals("bot") && args.length == 3 && args[1].equalsIgnoreCase("remove")
+                && sender instanceof Player player) {
             List<String> names = new ArrayList<>();
             for (Bot bot : plugin.bots().botsOf(player)) {
                 names.add(BotNames.rawName(bot));
             }
             return names;
         }
-        if (args.length == 2 && args[0].equalsIgnoreCase("persona")) {
-            return List.of("set", "show", "reset");
+        if (group.equals("do") && args.length == 3) {
+            if (args[1].equalsIgnoreCase("eat")) {
+                return List.of("COOKED_BEEF", "BREAD", "GOLDEN_APPLE", "ENCHANTED_GOLDEN_APPLE", "GOLDEN_CARROT");
+            }
+            if (args[1].equalsIgnoreCase("listen")) {
+                return prefix(List.of("on", "off"), args[2]);
+            }
         }
-        if (args.length == 2 && args[0].equalsIgnoreCase("eat")) {
-            return List.of("COOKED_BEEF", "BREAD", "GOLDEN_APPLE", "ENCHANTED_GOLDEN_APPLE", "GOLDEN_CARROT");
+        if (group.equals("ai") && args.length == 3) {
+            switch (args[1].toLowerCase(Locale.ROOT)) {
+                case "backend" -> {
+                    return prefix(List.of("auto", "deepseek", "astrbot"), args[2]);
+                }
+                case "persona" -> {
+                    return prefix(List.of("set", "show", "reset"), args[2]);
+                }
+                default -> {
+                    return List.of();
+                }
+            }
         }
-        if (args.length == 2 && args[0].equalsIgnoreCase("astrbot")) {
-            return List.of("set", "on", "off", "test", "status", "session", "clear", "say");
-        }
-        if (args[0].equalsIgnoreCase("ai") && args.length == 2) {
-            return List.of("set");
-        }
-        if (args[0].equalsIgnoreCase("ai") && args[1].equalsIgnoreCase("set") && args.length == 3) {
-            return List.of("default", "astrbot", "auto");
-        }
-        if (args[0].equalsIgnoreCase("astrbot") && args[1].equalsIgnoreCase("session") && args.length == 3) {
+        if (group.equals("astrbot") && args.length == 3 && args[1].equalsIgnoreCase("session")) {
             return List.of("per-player", "fixed", "per-message");
         }
-        if (args[0].equalsIgnoreCase("astrbot") && args[1].equalsIgnoreCase("set") && args.length == 5) {
+        if (group.equals("astrbot") && args[1].equalsIgnoreCase("set") && args.length == 5) {
             return List.of("per-player", "fixed", "per-message");
         }
-        if (args.length == 2 && args[0].equalsIgnoreCase("global")) {
-            return List.of("set", "reload", "debug", "ai", "astrbot");
-        }
-        if (args.length == 3 && args[0].equalsIgnoreCase("global") && args[1].equalsIgnoreCase("set")) {
+        if (group.equals("global") && args.length == 3 && args[1].equalsIgnoreCase("set")) {
             return List.of("clear");
         }
-        if (args.length == 3 && args[0].equalsIgnoreCase("global") && args[1].equalsIgnoreCase("debug")) {
+        if (group.equals("global") && args.length == 3 && args[1].equalsIgnoreCase("debug")) {
             return List.of("on", "off");
         }
-        if (args.length == 3 && args[0].equalsIgnoreCase("global") && args[1].equalsIgnoreCase("ai")) {
+        if (group.equals("global") && args.length == 3 && args[1].equalsIgnoreCase("ai")) {
             return List.of("set");
         }
-        if (args.length == 4 && args[0].equalsIgnoreCase("global")
+        if (group.equals("global") && args.length == 4
                 && args[1].equalsIgnoreCase("ai") && args[2].equalsIgnoreCase("set")) {
             return List.of("auto", "deepseek", "astrbot");
         }
-        if (args.length == 3 && args[0].equalsIgnoreCase("global") && args[1].equalsIgnoreCase("astrbot")) {
+        if (group.equals("global") && args.length == 3 && args[1].equalsIgnoreCase("astrbot")) {
             return List.of("set", "on", "off", "test", "status", "session", "clear");
         }
-        if (args.length == 4 && args[0].equalsIgnoreCase("global")
+        if (group.equals("global") && args.length == 4
                 && args[1].equalsIgnoreCase("astrbot") && args[2].equalsIgnoreCase("session")) {
             return List.of("per-player", "fixed", "per-message");
         }
-        if (args.length == 6 && args[0].equalsIgnoreCase("global")
+        if (group.equals("global") && args.length == 6
                 && args[1].equalsIgnoreCase("astrbot") && args[2].equalsIgnoreCase("set")) {
             return List.of("per-player", "fixed", "per-message");
         }
         return List.of();
+    }
+
+    private static List<String> prefix(List<String> options, String typed) {
+        String lower = typed.toLowerCase(Locale.ROOT);
+        List<String> result = new ArrayList<>();
+        for (String option : options) {
+            if (option.startsWith(lower)) {
+                result.add(option);
+            }
+        }
+        return result;
     }
 }

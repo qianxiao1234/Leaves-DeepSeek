@@ -71,7 +71,7 @@ public final class BotTools {
             }
             boolean removed = plugin.bots().remove(bot, plugin.settings().saveOnRemove());
             if (removed && plugin.botStates() != null) {
-                // 和 /buddy remove 保持一致：明确移除的假人不要留下存档，否则重启会被恢复回来
+                // 和 /buddy bot remove 保持一致：明确移除的假人不要留下存档，否则重启会被恢复回来
                 plugin.botStates().delete(botOwner);
             }
             return done(removed ? Json.ok("已移除假人", "bot", name) : Json.error("移除失败"));

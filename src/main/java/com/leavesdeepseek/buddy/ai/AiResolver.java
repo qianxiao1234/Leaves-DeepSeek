@@ -26,7 +26,7 @@ import java.util.concurrent.CompletableFuture;
  *   <li>只配置了 DeepSeek（个人或全局 Key）→ 用 DeepSeek；</li>
  *   <li>只配置了 AstrBot → 用 AstrBot；</li>
  *   <li>两者都配置了 → {@link AiBackend#NEED_CHOICE}，提示玩家用
- *       {@code /buddy ai set default|astrbot} 选择；</li>
+ *       {@code /buddy ai backend deepseek|astrbot} 选择；</li>
  *   <li>一个都没有 → {@link AiBackend#NONE}，并给出「缺什么」。</li>
  * </ol>
  */
@@ -86,7 +86,7 @@ public final class AiResolver {
                     reason = "你设置了优先使用 DeepSeek，但没有可用的 DeepSeek Key，已改用 AstrBot（纯对话）。";
                 } else {
                     backend = AiBackend.NONE;
-                    reason = "还没有可用的 AI：请用 /buddy set <apikey> 配置 DeepSeek Key，"
+                    reason = "还没有可用的 AI：请用 /buddy ai set <apikey> 配置 DeepSeek Key，"
                             + "或让管理员接入 AstrBot。";
                 }
             }
@@ -98,7 +98,7 @@ public final class AiResolver {
                     reason = "你设置了优先使用 AstrBot，但 AstrBot 不可用，已改用 DeepSeek。";
                 } else {
                     backend = AiBackend.NONE;
-                    reason = "AstrBot 不可用，也没有 DeepSeek Key：请用 /buddy set <apikey>，"
+                    reason = "AstrBot 不可用，也没有 DeepSeek Key：请用 /buddy ai set <apikey>，"
                             + "或让管理员用 /buddy global astrbot set 接入 AstrBot。";
                 }
             }
@@ -111,7 +111,7 @@ public final class AiResolver {
                     backend = AiBackend.ASTRBOT;
                 } else {
                     backend = AiBackend.NONE;
-                    reason = "还没有可用的 AI：请用 /buddy set <apikey> 配置 DeepSeek Key，"
+                    reason = "还没有可用的 AI：请用 /buddy ai set <apikey> 配置 DeepSeek Key，"
                             + "或让管理员用 /buddy global astrbot set 接入 AstrBot。";
                 }
             }

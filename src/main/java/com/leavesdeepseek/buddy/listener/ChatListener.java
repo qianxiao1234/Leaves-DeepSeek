@@ -24,9 +24,9 @@ import java.util.regex.Pattern;
  */
 public final class ChatListener implements Listener {
 
-    /** 「跟着我 / 过来 / 停下」这类高频指令走直通车道，不经过大模型 */
+    /** 「跟着我 / 过来 / 停下 / 复活」这类高频指令走直通车道，不经过大模型 */
     private enum QuickIntent {
-        FOLLOW, COME, STOP
+        FOLLOW, COME, STOP, REVIVE
     }
 
     private static final Pattern FOLLOW_PATTERN = Pattern.compile(
@@ -40,6 +40,10 @@ public final class ChatListener implements Listener {
                     + "|别跟了|别跟着|别跟着我|不要跟着我|不要跟了|不用跟着我|不用跟着|不用跟了"
                     + "|不许跟着我|不许跟了|停止跟随|别追了|松开我|别干了|别挖了|别砍了"
                     + "|stop|stay|standstill)(了|啊|吧|呀|哦|嘛|呗|呢)*$");
+    /** 「复活 / 救活」：倒地状态下必须能被最直白的话救起来 */
+    private static final Pattern REVIVE_PATTERN = Pattern.compile(
+            "^(你|快|赶紧|马上|请)*(复活|救活|救一下|救我|起来|站起来|别装死|醒醒|醒一醒|起来吧"
+                    + "|revive|respawn)(了|啊|吧|呀|哦|嘛|呗|呢)*$");
 
     private final LeavesDeepSeekPlugin plugin;
     private final Map<UUID, Long> cooldowns = new ConcurrentHashMap<>();
@@ -84,7 +88,7 @@ public final class ChatListener implements Listener {
         Bot bot = plugin.bots().primaryBot(player);
         if (bot == null) {
             plugin.log().debug("聊天", "跳过：" + player.getName() + " 没有已绑定的假人"
-                    + "（先 /buddy spawn，或重启后等待假人恢复完成）");
+                    + "（先 /buddy bot spawn，或重启后等待假人恢复完成）");
             return;
         }
 
@@ -120,6 +124,14 @@ public final class ChatListener implements Listener {
             return;
         }
 
+        // 倒地状态：除了「复活」直通指令，其余都先拦住，避免 AI 继续下命令
+        if (plugin.bots().isDowned(bot)) {
+            plugin.log().info("聊天", "跳过：假人倒地，等待复活");
+            player.sendActionBar(Text.component("§c" + botName
+                    + " 倒下了，说「复活」或输入 /buddy bot revive"));
+            return;
+        }
+
         // 没有可用 AI 时假人仍然存在，但聊天不触发大模型，避免每句话都回一句「还没配置 AI」刷屏。
         // 跟随/过来/停下这类直通指令在上面已经处理过了，不受影响。
         if (!plugin.ai().resolve(player).usable()) {
@@ -127,7 +139,7 @@ public final class ChatListener implements Listener {
                     + " 没有可用的 AI（假人仍可用 /buddy 命令操作）");
             if (aiMissingWarned.add(player.getUniqueId())) {
                 player.sendActionBar(Text.component(
-                        "§e还没有配置 AI：/buddy set <apikey>，现在只能用 /buddy 命令控制假人"));
+                        "§e还没有配置 AI：/buddy ai set <apikey>，现在只能用 /buddy 命令控制假人"));
             }
             return;
         }
@@ -217,11 +229,19 @@ public final class ChatListener implements Listener {
 
     private void executeQuickIntent(Player player, Bot bot, String botName, QuickIntent intent) {
         try {
+            if (plugin.bots().isDowned(bot) && intent != QuickIntent.REVIVE) {
+                reply(player, bot, botName, "我倒在地上了，先说「复活」或输入 /buddy bot revive 把我救起来。");
+                return;
+            }
             switch (intent) {
                 case FOLLOW -> {
-                    plugin.botActions().interrupt(bot, "主人让你跟上");
-                    plugin.navigator().forceFollow(bot, player, plugin.settings().followDistance());
-                    reply(player, bot, botName, "好，跟着你呢。");
+                    boolean started = plugin.followBot(bot, player, "主人让你跟上");
+                    String reason = started ? null : plugin.followDeferReason(bot);
+                    reply(player, bot, botName, started
+                            ? "好，跟着你呢。"
+                            : ("creeper".equals(reason)
+                                    ? "有苦力怕，我先跑开，安全了马上跟上。"
+                                    : "我先把这口吃的咽下去，马上跟上。"));
                 }
                 case COME -> {
                     plugin.botActions().interrupt(bot, "主人让你过去");
@@ -239,9 +259,17 @@ public final class ChatListener implements Listener {
                             }));
                 }
                 case STOP -> {
-                    // 与 /buddy stop 完全相同的一套逻辑：打断动作 + 关闭跟随
+                    // 与 /buddy move stop 完全相同的一套逻辑：打断动作 + 关闭跟随
                     plugin.stopBot(bot, "主人在聊天里说「停下」");
                     reply(player, bot, botName, "好，停下了，也不再跟着你了。");
+                }
+                case REVIVE -> {
+                    if (plugin.bots().isDowned(bot) || bot.isDead()) {
+                        plugin.reviveBot(bot, player);
+                        reply(player, bot, botName, "我回来了！东西一件都没少。");
+                    } else {
+                        reply(player, bot, botName, "我好好的，不用复活。");
+                    }
                 }
                 default -> {
                 }
@@ -260,6 +288,9 @@ public final class ChatListener implements Listener {
         }
         if (STOP_PATTERN.matcher(text).matches()) {
             return QuickIntent.STOP;
+        }
+        if (REVIVE_PATTERN.matcher(text).matches()) {
+            return QuickIntent.REVIVE;
         }
         return null;
     }

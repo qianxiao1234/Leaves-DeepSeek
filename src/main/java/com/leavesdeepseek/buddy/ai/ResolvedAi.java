@@ -25,7 +25,7 @@ public record ResolvedAi(AiBackend backend,
 
     /** DeepSeek Key 的来源。 */
     public enum KeySource {
-        /** 玩家用 /buddy set 配置的私有 Key */
+        /** 玩家用 /buddy ai set 配置的私有 Key */
         OWN("个人 Key"),
         /** 服主写在 config.yml 里的全局 Key */
         GLOBAL("服务器全局 Key"),

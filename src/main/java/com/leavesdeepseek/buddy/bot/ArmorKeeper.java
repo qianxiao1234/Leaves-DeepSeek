@@ -53,7 +53,7 @@ public final class ArmorKeeper {
                 continue;
             }
             Bot bot = plugin.bots().primaryBot(player);
-            if (bot == null || !bot.isValid() || bot.isDead() || bot.isSleeping()) {
+            if (bot == null || !bot.isValid() || bot.isDead() || bot.isSleeping() || plugin.bots().isDowned(bot)) {
                 continue;
             }
             // AI 正在处理请求时不要动背包，避免和 give_item / 合成互相踩

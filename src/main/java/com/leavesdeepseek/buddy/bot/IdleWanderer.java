@@ -60,7 +60,7 @@ public final class IdleWanderer {
                     || !bot.getWorld().equals(player.getWorld())) {
                 continue;
             }
-            if (bot.isSleeping() || bot.isDead() || bot.isInsideVehicle()) {
+            if (bot.isSleeping() || bot.isDead() || bot.isInsideVehicle() || plugin.bots().isDowned(bot)) {
                 continue;
             }
             if (!plugin.profiles().idleWander(player)) {

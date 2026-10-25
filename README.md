@@ -12,6 +12,8 @@
 
 假人会自己观察环境、规划路线、切换工具、挖掘/放置方块、战斗，并在完成后用一句话汇报。
 
+> 只是想进去和那位 AI 玩两把？直接看 [AI 躯壳 · 玩家速查](#ai-躯壳--玩家速查)。
+
 ---
 
 ## 功能
@@ -20,14 +22,15 @@
 - **不配 AI 也能用**：假人创建、跟随/过来/待命/睡觉/进食/护主/穿盔甲全部不依赖大模型，只有「自然语言指挥它自己干活」需要 Key。
 - **完整的玩家式操作**：`move_to` / `mine_block` / `place_block` / `attack_nearest` / `use_item` / `fish` / `sneak` / `swim` …
 - **A\* 寻路 + 玩家输入**：使用 Leaves 的 `MoveAction`（前进输入）、`JumpAction`、转向，不传送、不飞行。
-- **持续跟随**：主人走远时自动跟上，卡住会自动重新规划路线。
-- **自动战斗**：15 格内的敌对生物会主动**疾跑**过去清掉（靠近到 3 格内停步、面向目标、每 12 tick 攻击一次）；自动按 DPS 选武器（含附魔，耐久 <10% 跳过），有盾牌自动放副手；**看到苦力怕（10 格内）直接疾跑远离、不会去打**，坚守者潜行离开，末影人/僵尸猪灵/狼/铁傀儡不主动攻击；血量 <30% 撤退并吃最好的食物（附魔金苹果最优先），30%~60% 边打边吃，饥饿 <6 先吃；被 4 只以上围攻时撤退；战斗后自动拾取掉落物，并尽量避开边缘/水边/岩浆边。
+- **持续跟随**：主人走远时自动跟上，卡住会自动重新规划路线；**跟着主人遇到苦力怕也会第一时间疾跑躲开，离开危险 5 秒后自动继续跟随**。
+- **自动战斗**：15 格内的敌对生物会主动**疾跑**过去清掉（靠近到 3 格内停步、面向目标、每 12 tick 攻击一次）；自动按 DPS 选武器（含附魔，耐久 <10% 跳过），有盾牌自动放副手；**看到苦力怕（10 格内）每 0.25 秒检测一次、立刻疾跑远离、不会去打**，坚守者潜行离开，末影人/僵尸猪灵/狼/铁傀儡不主动攻击；血量 <30% 撤退并吃最好的食物（附魔金苹果最优先），30%~60% 边打边吃，饥饿 <6 先吃；**被多只怪围住时先站撸，只有血量掉到 30% 以下才持续跑开（跑到 12 格内没怪并安全 3 秒才停，被堵死角会就地反击）；被骷髅/掠夺者这类远程怪射到会立刻锁定射手冲上去，用「砍一刀退半步」的跑打方式逼近，不会站着挨箭**；战斗后自动拾取掉落物，并尽量避开边缘/水边/岩浆边。
+- **水域生存**：不在跟随时掉进水里会主动找最近的岸上岸（含 1 格岸沿）；跟着主人时允许下水，但**水下快没气会先浮上来**，不会把自己憋死；寻路会优先选干路，绕不开才游泳。主人下线时同样生效（不会因为你不在就淹死）。
 - **AstrBot 对接**：可接入 [AstrBot OpenAPI](https://docs.astrbot.app/dev/openapi.html)，用 `/buddy astrbot say` 直接向 AstrBot 提问，模型也可以调用 `ask_astrbot` 咨询服务器规则。
 - **空闲小动作**：空闲时较高频率（默认每 8 秒 35% 概率）在主人身边 2 格内随机走动。
 - **挖矿自动拾取**：挖完方块会主动走近捡起掉落物，并核对 `expected / collected / missing` 数量。
 - **状态持久化**：名字、位置、血量、饥饿、经验等级、背包与装备会自动保存到玩家目录，服务器重启后自动恢复假人。
 - **自动进食**：饥饿值低于阈值时自动吃背包里的普通食物；血量 **≤ 5** 时强制进食，优先吃饱食度最高的食物（附魔金苹果最优先、其次金胡萝卜/熟肉/金苹果），会直接打断战斗、寻路和 AI 任务，不需要主人同意也不经过 AI。其余情况下金苹果、附魔金苹果、金胡萝卜等贵重食物需先征得主人同意。
-- **可自定义人格**：每个玩家可用 `/buddy persona` 设置伙伴的性格与说话风格，未设置时使用全局默认。
+- **可自定义人格**：每个玩家可用 `/buddy ai persona` 设置伙伴的性格与说话风格，未设置时使用全局默认。
 - **状态感知**：每轮请求都会把位置、血量、背包、附近玩家/生物、视线方块等压缩成 JSON 交给模型。
 - **安全边界**：活动半径限制、受保护方块、禁止攻击主人、可关闭挖掘/放置/攻击、请求限流。
 - **可扩展**：新增一个工具只需要写一个 `AgentTool`（`Tools.of(...)` 一行即可）。
@@ -49,6 +52,10 @@
 ```
 
 产物：`build/libs/LeavesDeepSeek-0.1.0.jar`，放入服务端 `plugins/` 目录即可。
+
+> AI 躯壳的 WebSocket 服务端依赖 `org.java-websocket:Java-WebSocket:1.5.6`，会被打包进这个 jar
+> （`tasks.jar` 里只 zip 这一个依赖，并剔除 `META-INF/MANIFEST.MF` 与签名文件），
+> 所以 jar 从 ~340KB 变成 ~620KB 是正常的，**不需要**额外安装依赖。
 
 > 构建环境由 `gradle.properties` 指定：`org.gradle.java.home=D:/Program Files/zulu25`。
 > 如果你的 JDK 25 路径不同，或 `JAVA_HOME` 已指向 JDK 25，修改 / 删除该行即可。
@@ -95,35 +102,38 @@ players/<uuid>/
 
 | 后端 | 能力 | 配置方式 |
 | --- | --- | --- |
-| DeepSeek（默认） | Function Calling，可真正的操作假人 | `/buddy set <apikey> [model] [base-url]`（自动验证） |
+| DeepSeek（默认） | Function Calling，可真正的操作假人 | `/buddy ai set <apikey> [model] [base-url]`（自动验证） |
 | AstrBot | 纯对话，不能操作假人 | 玩家自己 `/buddy astrbot set <base-url> <api-key>`；管理员可用 `/buddy global astrbot set ...` 设默认 |
 
 只有一个后端可用时会自动使用它，不需要额外设置；**两个都可用时会要求你选择默认模型**：
 
 ```text
-/buddy ai set default    # 使用 DeepSeek（可操作假人）
-/buddy ai set astrbot    # 使用 AstrBot（纯聊天）
-/buddy ai set auto       # 恢复自动（两个都可用时仍会要求选择）
-/buddy ai                # 查看当前后端与可用情况
+/buddy ai backend deepseek    # 使用 DeepSeek（可操作假人）
+/buddy ai backend astrbot    # 使用 AstrBot（纯聊天）
+/buddy ai backend auto    # 恢复自动（两个都可用时仍会要求选择）
+/buddy ai status          # 查看当前后端与可用情况
 ```
 
 选择会保存在 `players/<uuid>/config.yml` 的 `ai.backend`，默认值由服务器 `config.yml` 的 `ai.backend` 决定。
 
-> **配置归属规则**：`plugins/LeavesDeepSeek/config.yml` 是全局配置，**只能**通过 `/buddy global ...` 修改；`/buddy set`、`/buddy astrbot ...`、`/buddy ai set`、`/buddy persona` 等只会写入 `players/<uuid>/config.yml`。
+> **配置归属规则**：`plugins/LeavesDeepSeek/config.yml` 是全局配置，**只能**通过 `/buddy global ...` 修改；`/buddy ai set`、`/buddy astrbot ...`、`/buddy ai set`、`/buddy ai persona` 等只会写入 `players/<uuid>/config.yml`。
 
-> 服务器 `config.yml` 里的 `deepseek.use-global-config`（默认 `true`）控制全局 Key 是否可以被玩家直接使用。`deepseek.api-key` 默认为空，所以默认情况下所有玩家只能用自己 `/buddy set` 的 Key；只有服主用 `/buddy global set <apikey>` 填入全局 Key 后，没有个人 Key 的玩家才会自动使用它。
+> 服务器 `config.yml` 里的 `deepseek.use-global-config`（默认 `true`）控制全局 Key 是否可以被玩家直接使用。`deepseek.api-key` 默认为空，所以默认情况下所有玩家只能用自己 `/buddy ai set` 的 Key；只有服主用 `/buddy global set <apikey>` 填入全局 Key 后，没有个人 Key 的玩家才会自动使用它。
 
 **使用 DeepSeek 时需要一把可用的 Key（自己的，或服主开放的全局 Key）：**
 
 ```text
-/buddy set <apikey> [model] [base-url]          # 玩家自己的 Key（写入 players/<uuid>/config.yml）
+/buddy ai set <apikey> [model] [base-url]          # 玩家自己的 Key（写入 players/<uuid>/config.yml）
+/buddy ai clean                                   # 清空自己的 Key/模型/地址，恢复默认值
 /buddy global set <apikey> [model] [base-url]   # 服务器全局 Key（管理员，写入 config.yml）
+/buddy global clean                             # 清空全局 Key/模型/地址，恢复默认值
 ```
 
 - `apikey` 必填；
 - `model`、`base-url` 可省略，或填 `default` 使用服务器默认值；
 - **如果填写 `base-url`，必须同时填写 `model`**；
-- 设置后会立即发一条最小请求验证 Key；`/buddy spawn` 和每次对话前也会自动验证一次，失败时会给出具体原因（401 Key 无效、402 余额不足、404 地址错误等）。
+- 清空配置用 `/buddy ai clean`（个人）或 `/buddy global clean`（全局）：Key 置空、模型回到 `deepseek-chat`、地址回到 `https://api.deepseek.com`；配置项缺失或留空时同样是这三个默认值。
+- 设置后会立即发一条最小请求验证 Key；`/buddy bot spawn` 和每次对话前也会自动验证一次，失败时会给出具体原因（401 Key 无效、402 余额不足、404 地址错误等）。
 
 玩家配置文件示例：
 
@@ -154,9 +164,9 @@ astrbot:
 人格设置保存在同一目录的 `persona.txt`（UTF-8 纯文本），未设置时回退到全局 `deepseek.extra-system-prompt`：
 
 ```text
-/buddy persona set 你说话很毒舌，喜欢吐槽主人，但做事很靠谱
-/buddy persona           # 查看当前人格
-/buddy persona reset     # 清除个人人格，改用全局默认
+/buddy ai persona set 你说话很毒舌，喜欢吐槽主人，但做事很靠谱
+/buddy ai persona           # 查看当前人格
+/buddy ai persona reset     # 清除个人人格，改用全局默认
 ```
 
 全局默认人格写在插件目录根部的 `persona.txt`（可选，UTF-8 纯文本），或者 `config.yml` 的 `deepseek.extra-system-prompt`。
@@ -174,13 +184,13 @@ deepseek:
 
 ```text
 /buddy global set <apikey> [model] [base-url]   # 写入全局 Key 并立即验证
-/buddy global set clear                         # 清除全局 Key
+/buddy global clean                             # 清空全局 Key/模型/地址，恢复默认值
 ```
 
 - `model` / `base-url` 不填或填 `default` 时，沿用 `config.yml` 里现有的 `deepseek.model` / `deepseek.base-url`；
 - 填写 `base-url` 时必须同时填写 `model`；
 - 如果 `deepseek.use-global-config` 是关闭的，设置 Key 时会自动打开（否则全局 Key 不生效，命令会提示）；
-- 只有拥有 `leavesdeepseek.admin` 权限的人能用，命令只写全局 `config.yml`，玩家个人设置仍然用 `/buddy set`。
+- 只有拥有 `leavesdeepseek.admin` 权限的人能用，命令只写全局 `config.yml`，玩家个人设置仍然用 `/buddy ai set`。
 
 ```yaml
 # 等价于执行 /buddy global set 后 config.yml 的变化
@@ -192,11 +202,26 @@ deepseek:
 > 全局 Key 默认为空，所以默认行为仍然是「每个玩家用自己的 Key」。只有服主填入 `deepseek.api-key` 后，没有个人 Key 的玩家才会自动回退到全局 Key。
 > 全局 Key 的验证结果缓存在 `plugins/LeavesDeepSeek/global-state.yml`，其中只保存 Key 的 SHA-256 指纹（前 12 字节），不会落盘明文。
 
+### 本地部署的模型（OpenAI 兼容接口）
+
+把 `base-url` 指向本地服务（例如 `http://127.0.0.1:8000/v1`）、`model` 填对方提供的模型名即可。针对小模型常见的两个问题已经处理：
+
+1. **不知道怎么控制假人**：系统提示词里会自动附上当前注册的全部工具速查表（`工具名(必填参数*, 可选参数)：说明`）、
+   「主人常见说法 → 该调用哪个工具」的对照表和调用示例；
+2. **不支持 Function Calling**：如果带 `tools` 的请求被服务端拒绝，插件会自动去掉 `tools` 重试一次；此时提示词要求模型
+   只输出一行 `{"name":"工具名","arguments":{...}}`，插件会解析并执行（也兼容用 json 围栏包起来的写法和 `tool/args` 写法）。
+
+如果模型连这行 JSON 都不肯输出，就只能聊天、不能操作假人了，建议换一个支持工具调用的模型。
+
+> 推理型本地模型（R1 / QwQ 等）会把 `max_tokens` 花在 `reasoning_content` 上，容易出现「有思考、没回复、没工具调用」。
+> 插件默认 `deepseek.max-tokens: 4096`；如果响应仍被截断，会自动翻倍重试一次，之后会明确提示你调大这个值。
+
 常用配置：
 
 ```yaml
 deepseek:
   model: "deepseek-chat"     # 需要 Function Calling，不要用 deepseek-reasoner
+  max-tokens: 4096           # 推理型本地模型（R1/QwQ）需要更大额度，否则会被截断
   max-tool-rounds: 8         # 一次对话最多连续调用几轮工具
   history-limit: 20          # 每个假人保留的历史消息数
 
@@ -205,7 +230,7 @@ ai:
 
 companion:
   name-prefix: "AI_"
-  auto-follow: true
+  auto-follow: false         # true：创建/唤醒假人后自动跟随主人（默认不跟随）
   follow-distance: 3.0
   skip-sleep-check: true     # 假人不参与睡眠计数，不会阻止玩家跳过夜晚
 
@@ -311,7 +336,7 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 | --- | --- |
 | `/buddy global` | 查看全局配置（默认后端、全局 DeepSeek Key、全局 AstrBot、调试开关） |
 | `/buddy global set <apikey> [model] [base-url]` | 设置服务器全局 DeepSeek Key（写入 `config.yml` 并验证） |
-| `/buddy global set clear` | 清除服务器全局 DeepSeek Key |
+| `/buddy global clean` | 清空全局 Key/模型/地址并恢复默认值（Key 空、`deepseek-chat`、`https://api.deepseek.com`） |
 | `/buddy global astrbot set <base-url> <api-key> [session-mode]` | 设置服务器全局 AstrBot 默认 |
 | `/buddy global astrbot on\|off\|test\|status\|session\|clear` | 管理全局 AstrBot |
 | `/buddy global ai set <auto\|deepseek\|astrbot>` | 设置全局默认 AI 后端 |
@@ -335,48 +360,99 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 
 除命令外，AI 伙伴也可以调用工具 `ask_astrbot` 咨询服务器规则（AstrBot 未配置时该工具会返回不可用）。
 
-> AstrBot 只负责对话。把默认后端设为 AstrBot 后，伙伴仍会跟随、护主、自动进食等，但**不会执行模型指令里的挖矿/放置/战斗等工具动作**（AstrBot 无法调用本插件的工具）。需要它动手干活时请用 `/buddy ai set default` 切回 DeepSeek。
+> AstrBot 只负责对话。把默认后端设为 AstrBot 后，伙伴仍会跟随、护主、自动进食等，但**不会执行模型指令里的挖矿/放置/战斗等工具动作**（AstrBot 无法调用本插件的工具）。需要它动手干活时请用 `/buddy ai backend deepseek` 切回 DeepSeek。
 
-> **没有 AI 也能用**：`/buddy spawn` 不再强制要求 Key。没有可用的 DeepSeek / AstrBot 时，假人照样能创建、
-> 自动跟随主人、护主、自动进食、穿盔甲，也可以用 `/buddy follow`、`/buddy come`、`/buddy stay`、
-> `/buddy sleep`、`/buddy eat`、`/buddy status` 等命令直接操作；只是不能通过自然语言指挥它自己干活。
+> **没有 AI 也能用**：`/buddy bot spawn` 不再强制要求 Key。没有可用的 DeepSeek / AstrBot 时，假人照样能创建、
+> 护主、自动进食、穿盔甲，也可以用 `/buddy move follow`、`/buddy move come`、`/buddy move stay`、
+> `/buddy move sleep`、`/buddy do eat`、`/buddy status` 等命令直接操作；只是不能通过自然语言指挥它自己干活。
+> 创建后默认**不会**自动跟随（`companion.auto-follow: false`），需要时 `/buddy move follow` 或说「跟着我」。
 > 配好 Key 后无需重新创建假人，聊天功能会立即生效。
 
 ## 使用
 
+命令按用途分成四组：**假人本体** `/buddy bot`、**移动** `/buddy move`、**做事** `/buddy do`、**AI 配置** `/buddy ai`
+（另有 `/buddy astrbot`、管理员用的 `/buddy global`）。`/buddy help` 会列出全部。
+
+**假人** — `/buddy bot <spawn|remove|list|revive|info>`
+
 | 命令 | 说明 |
 | --- | --- |
-| `/buddy set <apikey> [model] [base-url]` | 配置并验证你自己的 API Key（不配也能用命令操作假人） |
-| `/buddy spawn [名字] [皮肤名]` | 创建你的伙伴假人（不需要先配 AI） |
-| `/buddy task <自然语言>` | 给伙伴下达任务（核心） |
-| `/buddy say <内容>` | 让伙伴在聊天栏说话 |
-| `/buddy come` | 让伙伴走过来 |
-| `/buddy follow` | 持续跟随 |
-| `/buddy stay` | 原地待命（等同关闭跟随） |
-| `/buddy listen [on\|off]` | 切换“直接接管聊天” / “仅 @ 触发” |
-| `/buddy sleep` | 找到附近的床并睡觉 |
-| `/buddy eat [食物]` | 让伙伴吃东西（主人命令即视为同意吃贵重食物） |
-| `/buddy persona [set <描述>\|reset]` | 设置 / 查看 / 清除伙伴的人格 |
+| `/buddy bot spawn [名字] [皮肤名]` | 创建你的伙伴假人（不需要先配 AI） |
+| `/buddy bot remove [名字]` | 移除伙伴 |
+| `/buddy bot list` | 查看自己的伙伴 |
+| `/buddy bot revive` | 把倒下的伙伴救起来（物品一件不丢；不在线时从存档唤醒） |
+| `/buddy bot info` | 查看位置/血量/背包/动作（等同 `/buddy status`） |
+
+**移动** — `/buddy move <follow|come|stay|stop|sleep>`
+
+| 命令 | 说明 |
+| --- | --- |
+| `/buddy move follow` | 持续跟随 |
+| `/buddy move come` | 让伙伴走过来 |
+| `/buddy move stay` | 原地待命（等同关闭跟随） |
+| `/buddy move stop` | 停止全部动作并关闭跟随（重新跟上：说「跟着我」或 `/buddy move follow`） |
+| `/buddy move sleep` | 找到附近的床并睡觉 |
+
+**做事** — `/buddy do <task|say|eat|listen>`
+
+| 命令 | 说明 |
+| --- | --- |
+| `/buddy do task <自然语言>` | 给伙伴下达任务（核心） |
+| `/buddy do say <内容>` | 让伙伴在聊天栏说话 |
+| `/buddy do eat [食物]` | 让伙伴吃东西（主人命令即视为同意吃贵重食物） |
+| `/buddy do listen [on\|off]` | 切换“直接接管聊天” / “仅 @ 触发” |
+
+**AI** — `/buddy ai <set|clean|backend|status|persona>`
+
+| 命令 | 说明 |
+| --- | --- |
+| `/buddy ai set <apikey> [model] [base-url]` | 配置并验证你自己的 API Key（不配也能用命令操作假人） |
+| `/buddy ai clean` | 清空你自己的 Key / 模型 / 地址（恢复默认值） |
+| `/buddy ai backend <auto\|deepseek\|astrbot>` | 选择默认 AI 后端（默认 = DeepSeek） |
+| `/buddy ai status` | 查看两个后端的可用情况与实际使用值 |
+| `/buddy ai persona [set <描述>\|reset]` | 设置 / 查看 / 清除伙伴的人格 |
+
+**AstrBot** — `/buddy astrbot <set|on|off|test|status|session|clear|say>`
+
+| 命令 | 说明 |
+| --- | --- |
 | `/buddy astrbot set <base-url> <api-key> [session-mode]` | 配置你自己的 AstrBot（写入个人配置） |
 | `/buddy astrbot say <内容>` | 向 AstrBot 提问并把回复发到聊天框 |
-| `/buddy global set <apikey> [model] [base-url]` | 配置服务器全局 DeepSeek Key（管理员） |
-| `/buddy global <reload\|ai\|astrbot\|debug>` | 修改其他全局配置（管理员） |
-| `/buddy ai set <default\|astrbot\|auto>` | 选择默认 AI 后端（默认 = DeepSeek） |
-| `/buddy ai` | 查看两个后端的可用情况与实际使用值 |
-| `/buddy stop` | 停止全部动作，并关闭跟随（重新跟上：说「跟着我」或 `/buddy follow`） |
+
+**管理员**
+
+| 命令 | 说明 |
+| --- | --- |
+| `/buddy global set <apikey> [model] [base-url]` | 配置服务器全局 DeepSeek Key |
+| `/buddy global clean` | 清空全局 Key / 模型 / 地址（恢复默认值） |
+| `/buddy global <reload\|ai\|astrbot\|debug>` | 修改其他全局配置 |
+| `/buddy reload` | 重载配置 |
+| `/buddy debug [on\|off]` | 调试信息与请求日志 |
 | `/buddy status` | 查看位置/血量/背包/动作 |
-| `/buddy remove [名字]` | 移除伙伴 |
-| `/buddy list` | 查看自己的伙伴 |
-| `/buddy reload` | 重载配置（管理员） |
-| `/buddy debug [on\|off]` | 调试信息与请求日志（管理员） |
+| `/buddy help` | 查看全部分组命令 |
+
+> 旧版的 `/buddy follow`、`/buddy spawn`、`/buddy ai set` 等**扁平命令已移除**，请改用上表的新结构：
+> `/buddy bot …`（假人本体）、`/buddy move …`（移动跟随）、`/buddy do …`（做事说话）、`/buddy ai …`（模型与 Key）。
 
 聊天栏也可以直接对话：**默认情况下，拥有伙伴的玩家说的每句话都会发给 AI**，不需要前缀。
 你的发言仍然会正常公开显示，只有伙伴的回复默认只发给你（`chat.speak-in-chat: true` 时才会广播）。
-如果不想被打断，使用 `/buddy listen off` 切回仅 `@` 触发。
+如果不想被打断，使用 `/buddy do listen off` 切回仅 `@` 触发。
 
-> 「跟着我」「过来」「停下」这三类短句由**插件直接执行**，不经过大模型，也不需要配置 AI：
-> 说「停下」等同于执行 `/buddy stop`（打断挖掘/战斗/砍树 + 关闭跟随）；说「跟着我」等同于 `/buddy follow`；
-> 说「过来」等同于 `/buddy come`。
+> 「跟着我」「过来」「停下」「复活」这几类短句由**插件直接执行**，不经过大模型，也不需要配置 AI：
+> 说「停下」等同于执行 `/buddy move stop`（打断挖掘/战斗/砍树 + 关闭跟随）；说「跟着我」等同于 `/buddy move follow`；
+> 说「过来」等同于 `/buddy move come`；说「复活」等同于 `/buddy bot revive`。
+> 「跟着我」是最高优先级：假人会立刻放下手上的活（唯一例外是血量危急时的强制进食，吃完会立刻跟上）。
+
+### 死亡与复活
+
+假人受到致命伤时**不会真的死亡、不会掉落任何物品**：
+
+1. 插件拦下死亡（`BotDeathEvent`），假人进入「倒地」状态：保留背包与全部装备、免疫伤害、停止所有动作；
+2. 主人会在聊天里收到提示，说「**复活**」或执行 `/buddy bot revive` 即可救起；
+3. 复活时回满血、传送到主人身边（距离 32 格内则原地起来），倒地前正在跟随的会自动继续跟；
+4. 倒地状态会写进 `bot-state.yml`，服务器重启后仍然是倒地状态，需要再次复活；如果假人已不在线，`/buddy bot revive` 会尝试从存档重新生成。
+
+> 旧版本「死亡时装备掉一地、重启后存档又恢复一套」的问题，现在从源头被拦住：死亡根本不发生，也就不存在第二份掉落物。
 
 ### 权限
 
@@ -387,6 +463,128 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 | `leavesdeepseek.admin` | OP | 重载配置、调试 |
 
 > 创建假人本身还受 Leaves 的假人功能配置限制；`/bot` 命令的权限为 `bukkit.command.bot`。
+
+## AI 躯壳 · 玩家速查
+
+> 给来帮忙测 bug 的朋友：**不用装任何东西**，进服、说话就行。
+
+服务器里那个叫 **Whalien** 的假人背后不是脚本，是一个会自己看、自己走、自己反应的 AI。
+它有三个名字，随便叫：**Whalien / 沈知潮 / 潮水**。
+
+### 怎么跟它交流
+
+直接在聊天框说话，它看得见：
+
+| 你说 | 它会 |
+| --- | --- |
+| 跟我 / 跟上 / 过来 / 回来 | 走向你，停在 2~3 格外，不会贴脸 |
+| 停 / 别动 / 站住 / 等我 | 立刻停下 |
+| 逛 / 转转 / 随便走 | 在你附近 20 格内随机溜达 |
+| 带问号的句子 | 会回一句（现在还很笨） |
+
+它话不多，别指望它陪你聊天；目前更擅长「做事」而不是「说话」。
+
+### 它能做什么
+
+```
+跟随    跟到 2~3 格停住
+移动    会绕简单障碍走到指定坐标
+吃      饿了自己吃（不吃贵重食物，除非血量很低）
+打      被怪贴身会还手（打不过会跑）
+看      能看见你的位置、血量、手持物、游戏模式
+背包    看得见自己全部物品，包括自定义名与附魔
+```
+
+**还不太会**：合成、造房子、整理箱子、长距离跨地形赶路、复杂地形挖矿。
+
+### 请这样带它玩
+
+```
+✔  带它散步、跟着你逛村子
+✔  丢东西在地上，它会捡
+✔  带它打怪，看它会不会帮忙
+✔  故意走远一点，看它跟不跟得上
+✘  别用 TNT / 岩浆烧它（会死，死了要重养）
+✘  别一直拿剑砍它（测一两下就够）
+✘  别把它推下悬崖，也别用管理命令瞬移它
+```
+
+### 报 bug 按这个格式（时间 / 你做了什么 / 它做了什么）
+
+```
+时间      20:35 左右
+我说的    "跟我来"
+我做的    从房子走到村口，大约 30 格
+它做的    跟到一半停在原地，然后左右抖了十几秒
+我期望    它应该跟到村口
+截图/录像  有就最好
+```
+
+只写「它卡住了」是查不出来的。
+
+### 已知问题（不用重复报）
+
+| 现象 | 原因 | 状态 |
+| --- | --- | --- |
+| 刚上线时它不知道背包里有什么 | 背包基线在 attach 前就被写掉了 | 已改：attach 后强制推一帧 `full:true`（待验证） |
+| 打它一下伤害记两次 | 事件推送 + 血量兜底重复计数 | 已改：500ms 去重，字段统一为 `amount/cause/source/hpAfter/pos` |
+| 没连上时它会自己慢慢走开 | 粘性跟随在旁观态被看门狗接回去 | 已改：躯壳取消/暂停任务时清掉跟随状态 |
+| 说话很笨，只会回「听见了」 | 对话侧还在做 | 计划中 |
+
+## AI 躯壳（外部机器人接管）
+
+除了「有自己 AI 的伙伴假人」，插件还能造**躯壳**：一具完全交给外部机器人控制的生存玩家。
+躯壳不跟随、不护主、不闲聊、不自动决策——它只做外部 AI 下发的动作，感知数据按固定频率推回去。
+
+```powershell
+# 1) config.yml：打开躯壳服务（默认关闭）
+agent:
+  enabled: true
+  bind: "127.0.0.1"   # 强烈建议保持只绑本机
+  port: 8123
+  token: ""           # 留空 = 默认 "leavesdeepseek"（插件名小写）；对外开放前请改成随机串
+```
+
+```text
+# 2) 造躯壳（仅 OP）
+/ai body create Whalien                  # 在当前位置
+/ai body create Whalien world 120 70 -300
+/ai body list
+/ai body info Whalien
+/ai body remove Whalien --save
+/ai body take Whalien                    # 踢掉当前控制会话
+/ai body move Whalien 120 70 -300        # 卡地形救场
+/ai body anchor Whalien set|clear        # 死亡重生点
+/ai body config Whalien allow-pvp true   # 单躯壳覆盖配置
+```
+
+```text
+# 3) 外部机器人连上来（WebSocket + JSON-RPC 2.0）
+ws://127.0.0.1:8123/agent
+{"jsonrpc":"2.0","id":0,"method":"auth","params":{"token":"<agent.token>"}}
+{"jsonrpc":"2.0","id":1,"method":"body.attach","params":{"name":"Whalien"}}
+{"jsonrpc":"2.0","id":2,"method":"sense.snapshot"}
+{"jsonrpc":"2.0","id":3,"method":"act.goto","params":{"x":120,"y":70,"z":-300}}
+```
+
+- 感知：`sense.snapshot / terrain / entity / item / blockAt / blocks / findBlock / player / canReach`，
+  另有 5 Hz 的 `t:"M"`（运动）、`t:"T"`（地形语义）、`t:"P"`（附近玩家）、`t:"K"`（任务）、
+  背包变化时的 `t:"I"`。
+- 动作：`act.goto / follow / look / attack / dig / digArea / place / craft / container / use / equip /
+  eat / drop / jump / sneak / sprint / chat / cancel / queue`，统一返回 `taskId`，进度和结果用
+  `task.started / task.progress / task.done / task.failed` 事件推回。
+- 事件：`ev.damage / death / respawn / playerNear / playerLeave / chat / itemPickup / hungry / state`。
+- 三态：90 秒没有请求自动切成**旁观**（`paused`，不受伤也不能动作），再 300 秒存档下线（`offline`）；
+  重新 `body.attach` 会原地恢复（背包/经验/血量都在）。
+- 安全：只绑本机 + token 鉴权 + 每秒动作/感知限速 + 受保护方块 + 操作半径 + TPS 保护 + 审计日志
+  （`plugins/LeavesDeepSeek/bodies/audit-YYYY-MM-DD.jsonl`）。
+
+> 完整协议（所有字段、错误码 `-32001…-32021`、验收清单）见仓库根目录的 [`ai_body_SPEC.md`](ai_body_SPEC.md)。
+> 躯壳的存档在 `plugins/LeavesDeepSeek/bodies/<名字>/state.yml`，与传统假人的 `players/<uuid>/` 完全分开。
+> 联调资料（客户端、模拟服务端、验收文档）在 [`AI_DOCS/`](AI_DOCS/)：`ai_body_SPEC.md`、`ai_body_DELIVERY.md`、
+> `ai_body_FIX_REQUEST_v1.md`、`ai_body_PLAYER_GUIDE.md`。
+
+**目前一个连接只能挂一个躯壳**；多个躯壳要开多个连接（`agent.max-bodies-per-session` 默认 1）。
 
 ## 工作原理
 
@@ -446,13 +644,14 @@ Tools.of("smelt_item", "把背包里的矿石放进熔炉烧炼", schema, (conte
 - **多假人**：默认每个玩家 1 个；`max-per-player` 可调大，`/buddy` 命令始终操作第一个伙伴。
 - **睡觉**：假人默认不参与睡眠计数（`companion.skip-sleep-check: true`），不会导致夜晚无法跳过；`find_bed` / `sleep_in_bed` 支持让它真的躺下睡觉。
 - **盔甲**：后台 `ArmorKeeper` 每 5 秒检查一次，只补**空槽位**，绝不自动升级已有装备；升级必须由主人明确要求（AI 调用 `equip_armor`）。评分规则：`保护点数 × 1000 + 材质等级 × 100 + 保护类附魔等级 × 10`，所以材质等级永远优先于附魔。换装失败会自动回滚，不会吞物品。
-- **进食**：普通食物会自动吃；金苹果、附魔金苹果、金胡萝卜等贵重食物必须得到主人明确同意（对话中允许或 `/buddy eat 金苹果`）。例外：血量 ≤ `survival.emergency-eat-health`（默认 5）时会强制进食，优先高饱食度食物（附魔金苹果最优先），无需同意、不经过 AI。
+- **进食**：普通食物会自动吃；金苹果、附魔金苹果、金胡萝卜等贵重食物必须得到主人明确同意（对话中允许或 `/buddy do eat 金苹果`）。例外：血量 ≤ `survival.emergency-eat-health`（默认 5）时会强制进食，优先高饱食度食物（附魔金苹果最优先），无需同意、不经过 AI。
 - **AstrBot**：按 SSE 流式读取，读取超时默认 120 秒（`ask_astrbot` 工具会使用独立超时）；回复超过 `max-reply-chars` 会截断；`username` 统一加 `mc-` 前缀，避免与 AstrBot 配置的管理员 ID 冲突。
-- **AstrBot 后端**：只能对话，不能像 DeepSeek 那样调用工具操作假人；需要动手时用 `/buddy ai set default` 切回 DeepSeek。
+- **AstrBot 后端**：只能对话，不能像 DeepSeek 那样调用工具操作假人；需要动手时用 `/buddy ai backend deepseek` 切回 DeepSeek。
 - **对话历史**：内存保存，服务器重启后清空；假人的等级、经验、血量、背包和装备则会自动保存与恢复。
 - **控制台日志**：`chat.log-to-console: true` 时，玩家与假人的对话、AstrBot 问答、AI 工具调用都会以 `[对话]` / `[AI工具]` / `[AstrBot]` 前缀打印到服务端控制台；API Key 不会打印。
-- **自动战斗**：靠近到 3 格停步、面向目标、每 12 tick 攻击一次；按 DPS（伤害×攻速，含锋利）选武器，耐久 <10% 换下一把；无武器则撤退；血量 <30% 撤退吃金苹果，30%~60% 边打边吃；被 4 只以上围攻时撤退；战斗结束后自动拾取掉落物。
+- **自动战斗**：靠近到 3 格停步、面向目标、每 12 tick 攻击一次；按 DPS（伤害×攻速，含锋利）选武器，耐久 <10% 换下一把；无武器则撤退；血量 <30% 撤退吃金苹果，30%~60% 边打边吃；**被多只怪围住时先站撸，血量掉到 30% 以下才持续跑开**（跑到 12 格没怪并安全 3 秒才停，被堵死角就地反击）；**被骷髅/掠夺者这类远程怪打中会立刻锁定射手冲上去，用「砍一刀退半步」的跑打方式逼近**；战斗结束后自动拾取掉落物。
 - **战斗禁忌**：看到苦力怕（10 格内）就疾跑远开、绝不近战；坚守者潜行离开（不跑）；末影人、僵尸猪灵、狼、铁傀儡不主动攻击；避免站在方块边缘、水边、岩浆边战斗。
+- **AI 躯壳**：`act.craft` 的 3×3 配方要求半径 4 格内有工作台（否则 `-32017`）；`act.container` 默认禁用；`sense.terrain` 的地标/危险是半径 8 采样；`act.queue` 的 `elapsedMs` 是任务真实运行时长，`etaMs` 算不出来时给 `-1`；躯壳的跟随是「一次性任务」，进到 `distance+0.5` 内稳定 10 tick 就结束，需要持续跟随时由外部 AI 重新下发。
 
 ## 目录结构
 
@@ -466,4 +665,13 @@ src/main/java/com/leavesdeepseek/buddy/
 ├── listener/                      # 聊天触发、假人生命周期
 ├── config/                        # 配置快照
 └── util/                          # JSON / 文本 / 调度
+
+src/main/java/com/leavesdeepseek/agent/   # AI 躯壳（独立子系统，对外 WebSocket）
+├── AgentServer / AgentSession     # WS + JSON-RPC + 限速
+├── BodyManager / AIBody           # 躯壳注册表与三态
+├── BodyController                 # 20 Hz 内环（任务队列 / 自动进食 / 捡物 / 卡住自愈）
+├── SensorHub                      # sense.* 与 M/I/T/P/K 推送帧、ev.* 事件
+├── SpectatorGuard / BodyStore     # 心跳旁观、bodies/<name>/state.yml
+├── task/                          # goto/follow/look/attack/dig/place/craft/...
+└── command/AICommand              # /ai body ...
 ```
