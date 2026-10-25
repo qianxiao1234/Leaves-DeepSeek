@@ -582,10 +582,13 @@ ws://127.0.0.1:8123/agent
 {"jsonrpc":"2.0","id":5,"method":"body.create","params":{"name":"Whalien"}}
 ```
 
-- 躯壳生命周期（**不需要 attach 就能调**）：`body.list`（全部躯壳 + `mine` 标记）、
+- **躯壳生命周期（不需要 attach）**：`body.list`（全部躯壳 + `mine` 标记）、
   `body.create`（`name` / `x,y,z` / `world` / `autoAttach=true`）、`body.delete`（只能删自己造的）。
-  是否允许 AI 造/删由 `agent.allow-create`（默认 true）与 `agent.allow-delete`（默认 **false**）控制；
+  是否允许 AI 造/删由 `agent.allow-create`（默认 true）与 `agent.allow-delete`（默认 **own**，可选 `all`/`false`）控制；
   归属按 token 指纹判断（`body.create` 造的才有 owner），没有 owner 的老躯壳只能由管理员删。
+- **保活与唤醒**：`body.keepalive`（刷新闲置计时，返回当前 state/degraded，**不计入动作限速**）、
+  `body.wake`（旁观 → remote，等价于重复 attach）。`act.*` 在旁观/倒地时分别返回
+  `-32020 reason=paused` / `-32015 reason=downed`，客户端可以据此决定"自愈"还是"等"。
 
 - 感知：`sense.snapshot / terrain / entity / item / blockAt / blocks / findBlock / player / canReach`，
   另有 5 Hz 的 `t:"M"`（运动）、`t:"T"`（地形语义）、`t:"P"`（附近玩家）、`t:"K"`（任务）、
@@ -595,7 +598,8 @@ ws://127.0.0.1:8123/agent
   `task.started / task.progress / task.done / task.failed` 事件推回。
 - 事件：`ev.damage / death / respawn / playerNear / playerLeave / chat / itemPickup / hungry / state`。
 - 三态：90 秒没有请求自动切成**旁观**（`paused`，不受伤也不能动作），再 300 秒存档下线（`offline`）；
-  重新 `body.attach` 会原地恢复（背包/经验/血量都在）。
+  重新 `body.attach` 会原地恢复（背包/经验/血量都在）。客户端每 20 秒发一次 **`body.keepalive`** 就不会被塞进旁观
+  （`idle-to-paused-seconds: 0` = 永不）；已进旁观时发 `body.wake`（或重复 `body.attach`）立刻唤醒。
 - 安全：只绑本机 + token 鉴权 + 每秒动作/感知限速 + 受保护方块 + 操作半径 + TPS 保护 + 审计日志
   （`plugins/LeavesDeepSeek/bodies/audit-YYYY-MM-DD.jsonl`）。
 

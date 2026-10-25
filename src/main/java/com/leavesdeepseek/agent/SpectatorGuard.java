@@ -23,6 +23,10 @@ public final class SpectatorGuard {
             return;
         }
         AgentConfig config = body.manager().config();
+        // idle-to-paused-seconds: 0 = 永不因闲置进旁观（连续保活做不到时也不会被塞进旁观）
+        if (config.idleToPausedSeconds() <= 0) {
+            return;
+        }
         long idle = System.currentTimeMillis() - body.lastSeen();
         long toPaused = config.idleToPausedSeconds() * 1000L;
         long toOffline = toPaused + config.pausedToOfflineSeconds() * 1000L;
@@ -57,13 +61,19 @@ public final class SpectatorGuard {
                 boolean switched = switchToSpectator(bot);
                 GameMode actual = bot.getGameMode();
                 if (switched && actual == GameMode.SPECTATOR) {
+                    body.degraded(false);
                     body.manager().plugin().log().info("躯壳",
                             "[GUARD] paused ok | " + body.name() + " gamemode=" + actual
                                     + " reason=" + reason);
                 } else {
+                    body.degraded(true);
                     body.manager().plugin().log().error("躯壳",
                             "[GUARD] 切旁观失败！" + body.name() + " gamemode=" + actual
                                     + "（躯壳仍在世界内活动，可能被水流推动）", null);
+                    body.sensors().event("ev.state", JsonRpc.object(
+                            "state", "paused", "reason", "paused-degraded",
+                            "gamemode", actual == null ? "" : actual.name(),
+                            "degraded", true));
                 }
                 if (bot.isInWater()) {
                     body.manager().plugin().log().warn("躯壳",

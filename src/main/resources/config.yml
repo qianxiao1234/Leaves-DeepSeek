@@ -4,7 +4,7 @@
 # ============================================================
 
 # 配置版本（插件据此自动迁移旧配置，请勿手动删除）
-config-version: 12
+config-version: 13
 
 deepseek:
   # 服务器全局 API Key。留空表示不提供全局 Key（默认留空，由服主决定是否开放）
@@ -251,7 +251,7 @@ agent:
   max-sense-per-second: 4
   max-concurrent-tasks: 2
   chat-cooldown-ms: 2000
-  # 多久没请求 → 进旁观（paused）；旁观后再多久 → 存档下线（offline）
+  # 多久没请求 → 进旁观（paused）；0 = 永不进旁观（配合客户端的 body.keepalive 保活）
   idle-to-paused-seconds: 90
   paused-to-offline-seconds: 300
   auto-respawn: false

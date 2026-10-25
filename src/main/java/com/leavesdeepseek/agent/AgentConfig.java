@@ -98,7 +98,7 @@ public final class AgentConfig {
         maxSensePerSecond = clamp(config.getInt("agent.max-sense-per-second", 4), 1, 100);
         maxConcurrentTasks = clamp(config.getInt("agent.max-concurrent-tasks", 2), 1, 8);
         chatCooldownMs = clamp(config.getInt("agent.chat-cooldown-ms", 2000), 0, 60000);
-        idleToPausedSeconds = clamp(config.getInt("agent.idle-to-paused-seconds", 90), 5, 3600);
+        idleToPausedSeconds = clamp(config.getInt("agent.idle-to-paused-seconds", 90), 0, 3600);
         pausedToOfflineSeconds = clamp(config.getInt("agent.paused-to-offline-seconds", 300), 5, 86400);
         autoRespawn = config.getBoolean("agent.auto-respawn", false);
         respawnDelaySeconds = clamp(config.getInt("agent.respawn-delay-seconds", 0), 0, 300);

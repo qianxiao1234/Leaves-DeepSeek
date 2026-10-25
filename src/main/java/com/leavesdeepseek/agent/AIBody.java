@@ -39,6 +39,8 @@ public final class AIBody {
     private volatile long pausedSince = System.currentTimeMillis();
     private volatile AgentSession session;
     private volatile boolean dead;
+    /** 旁观没切成功（游戏模式还是生存态）：给客户端一个可见的降级标记。 */
+    private volatile boolean degraded;
     /** 归属指纹（token 的 sha256 前 16 位）；空 = 老躯壳/命令行创建。 */
     private volatile String ownerKey = "";
 
@@ -167,6 +169,15 @@ public final class AIBody {
     /** 归属指纹（空 = 老躯壳，谁都不能通过 RPC 删）。 */
     public String ownerKey() {
         return ownerKey;
+    }
+
+    /** 旁观模式没切成功（身体还是生存态）—— 给客户端与 /ai body info 一个可见标记。 */
+    public boolean degraded() {
+        return degraded;
+    }
+
+    public void degraded(boolean degraded) {
+        this.degraded = degraded;
     }
 
     public void ownerKey(String ownerKey) {

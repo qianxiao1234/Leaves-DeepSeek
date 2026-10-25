@@ -208,6 +208,8 @@ public final class SensorHub {
             object.add("task", task);
         }
         object.addProperty("queued", Math.max(0, body.controller().snapshot().size() - 1));
+        object.addProperty("degraded", body.degraded());
+        object.addProperty("downed", body.dead());
         if (body.anchor() != null) {
             object.add("anchor", VecUtil.toArray(body.anchor()));
         }

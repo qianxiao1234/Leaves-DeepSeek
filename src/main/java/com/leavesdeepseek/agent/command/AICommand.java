@@ -193,6 +193,11 @@ public final class AICommand implements CommandExecutor, TabCompleter {
         if (body.dead()) {
             Text.send(sender, "§c状态：倒地（物品已保留）§7- 用 §f/ai body revive " + body.name() + " §7救起");
         }
+        if (body.degraded()) {
+            Text.send(sender, "§e警告：旁观模式没切成功（gamemode 仍是生存态），躯壳可能还在动/被水流推。");
+        }
+        Text.send(sender, "§7闲置：§f" + Math.max(0, (System.currentTimeMillis() - body.lastSeen()) / 1000L)
+                + " 秒 §7（§f" + manager().config().idleToPausedSeconds() + "§7 秒进旁观，0 = 永不）");
         String token = manager().store().tokenOf(body.name());
         Text.send(sender, "§7专属 token：§f"
                 + (token.isBlank() ? "（未设置，用全局 agent.token）" : mask(token))

@@ -262,6 +262,10 @@ public final class AgentServer extends WebSocketServer {
                 break;
         }
         AIBody body = attached(session);
+        if (body != null && !"body.detach".equals(method)) {
+            // 任何针对躯壳的请求都算「活着」——否则 act/sense 再频繁也照样被判 idle 塞进旁观
+            body.touch();
+        }
         switch (method) {
             case "body.attach":
                 return attach(session, params);
@@ -283,6 +287,26 @@ public final class AgentServer extends WebSocketServer {
                 return respawn(requireBody(body));
             case "body.anchor":
                 return anchor(requireBody(body), params);
+            case "body.keepalive": {
+                // 保活：刷新 idle 计时，让「人在线只是不想动」不被当成闲置
+                AIBody alive = requireBody(body);
+                alive.touch();
+                JsonObject result = new JsonObject();
+                result.addProperty("ok", true);
+                result.addProperty("state", alive.state().name().toLowerCase(Locale.ROOT));
+                result.addProperty("tick", manager.currentTick());
+                result.addProperty("serverMs", System.currentTimeMillis());
+                result.addProperty("degraded", alive.degraded());
+                return result;
+            }
+            case "body.wake": {
+                // 显式唤醒（等价于同会话再 attach 一次，但不用拼 name）
+                AIBody woken = requireBody(body);
+                woken.guard().resume("client-wake");
+                woken.touch();
+                return JsonRpc.object("ok", true, "state",
+                        woken.state().name().toLowerCase(Locale.ROOT));
+            }
             case "sense.snapshot":
                 return requireBody(body).sensors().snapshot();
             case "sense.terrain":
@@ -445,7 +469,11 @@ public final class AgentServer extends WebSocketServer {
                 "造一具躯壳（默认自动 attach 并推全量背包）");
         addHelp(methods, "body.delete", "name, save=true", "删掉躯壳（只能删自己造的）");
         addHelp(methods, "body.help", "", "列出所有方法");
-        addHelp(methods, "body.attach", "name", "绑定躯壳（每躯壳同时只允许一个会话）");
+        addHelp(methods, "body.attach", "name",
+                "接管躯壳；同一会话重复调用 = 唤醒（paused → remote），不会报 busy");
+        addHelp(methods, "body.keepalive", "",
+                "保活：刷新闲置计时并返回当前 state（建议每 20 秒一次，不计入动作限速）");
+        addHelp(methods, "body.wake", "", "从旁观/闲置态回到 remote（等价于重复 attach，无参）");
         addHelp(methods, "body.detach", "", "解绑并立刻进入旁观");
         addHelp(methods, "body.info", "", "完整快照（同 sense.snapshot）");
         addHelp(methods, "body.spawn", "save?", "上线/恢复");
@@ -550,12 +578,15 @@ public final class AgentServer extends WebSocketServer {
 
     private JsonElement act(AIBody body, String method, JsonObject params) {
         Bot bot = body.bot();
-        if (bot == null || !bot.isValid()) {
-            throw new JsonRpc.RpcException(JsonRpc.BODY_OFFLINE, "躯壳不在线");
+        if (bot == null || !bot.isValid() || body.state() == AIBody.State.OFFLINE) {
+            throw new JsonRpc.RpcException(JsonRpc.BODY_OFFLINE, "躯壳不在线",
+                    JsonRpc.object("reason", "offline", "body", body.name()));
         }
         if (body.state() != AIBody.State.REMOTE) {
-            throw new JsonRpc.RpcException(JsonRpc.SPECTATOR, "躯壳当前不可操作（state="
-                    + body.state().name().toLowerCase(Locale.ROOT) + "）");
+            String reason = body.state().name().toLowerCase(Locale.ROOT);
+            throw new JsonRpc.RpcException(JsonRpc.SPECTATOR,
+                    "躯壳当前不可操作（state=" + reason + "）；发 body.keepalive 保活或 body.wake 唤醒",
+                    JsonRpc.object("reason", reason, "body", body.name()));
         }
         if (body.dead()) {
             throw new JsonRpc.RpcException(JsonRpc.DENIED,

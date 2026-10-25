@@ -195,6 +195,7 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
      *   <li>v9 -> v10：新增 {@code agent.allow-create} / {@code allow-delete} 等（AI 自建/自删躯壳）。</li>
      *   <li>v10 -> v11：新增 {@code agent.auto-load} / {@code keep-inventory}，{@code allow-delete} 改三态。</li>
      *   <li>v11 -> v12：新增 {@code agent.announce-death} / {@code announce-respawn}（躯壳倒地/复活全服广播）。</li>
+     *   <li>v12 -> v13：{@code idle-to-paused-seconds} 支持 0（永不进旁观），配合 body.keepalive/wake。</li>
      * </ul>
      */
     private void migrateConfig() {
@@ -375,6 +376,18 @@ public final class LeavesDeepSeekPlugin extends JavaPlugin {
             changed = true;
             getLogger().info("config.yml 已升级到 v12：新增 agent.announce-death / announce-respawn（躯壳倒地广播）。");
             version = 12;
+        }
+
+        if (version < 13) {
+            // 保活/唤醒：idle-to-paused-seconds 允许 0（永不进旁观）
+            if (config.getInt("agent.idle-to-paused-seconds", 90) == 5) {
+                // 旧版 clamp 把 0 变成了 5，这里还原成「永不」
+                config.set("agent.idle-to-paused-seconds", 0);
+            }
+            config.set("config-version", 13);
+            changed = true;
+            getLogger().info("config.yml 已升级到 v13：idle-to-paused-seconds 支持 0（永不进旁观），"
+                    + "客户端可用 body.keepalive / body.wake。");
         }
 
         if (changed) {

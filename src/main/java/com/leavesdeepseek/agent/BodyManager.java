@@ -657,6 +657,9 @@ public final class BodyManager {
             entry.addProperty("owner", owner == null || owner.isBlank() ? "" : owner);
             entry.addProperty("mine", requesterKey != null && !owner.isBlank() && owner.equals(requesterKey));
             entry.addProperty("downed", body.dead());
+            entry.addProperty("degraded", body.degraded());
+            entry.addProperty("idleSeconds",
+                    Math.max(0, (System.currentTimeMillis() - body.lastSeen()) / 1000L));
             String token = store.tokenOf(body.name());
             entry.addProperty("hasToken", !token.isBlank());
             array.add(entry);
