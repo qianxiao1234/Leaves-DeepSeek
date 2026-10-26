@@ -3,6 +3,7 @@ package com.leavesdeepseek.buddy.bot;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -262,7 +263,7 @@ public final class Pathfinder {
             return false;
         }
         Material below = cache.at(x, y - 1, z);
-        return below.isSolid() || below == Material.WATER;
+        return below == Material.WATER || cache.supportsFeet(x, y, z);
     }
 
     private static boolean passable(BlockCache cache, int x, int y, int z) {
@@ -276,7 +277,7 @@ public final class Pathfinder {
         if (material == Material.WATER) {
             return true;
         }
-        return !material.isSolid();
+        return cache.isPassable(x, y, z);
     }
 
     /**
@@ -308,6 +309,8 @@ public final class Pathfinder {
 
         private final World world;
         private final Map<Long, Material> cache = new HashMap<>(8192);
+        private final Map<Long, Boolean> passableCache = new HashMap<>(8192);
+        private final Map<Long, Boolean> supportCache = new HashMap<>(4096);
 
         private BlockCache(World world) {
             this.world = world;
@@ -318,13 +321,31 @@ public final class Pathfinder {
         }
 
         private Material at(int x, int y, int z) {
-            long key = ((long) (x & 0x3FFFFFF) << 38) | ((long) (z & 0x3FFFFFF) << 12) | (y & 0xFFF);
+            long key = key(x, y, z);
             Material material = cache.get(key);
             if (material == null) {
                 material = world.getBlockAt(x, y, z).getType();
                 cache.put(key, material);
             }
             return material;
+        }
+
+        private boolean isPassable(int x, int y, int z) {
+            long key = key(x, y, z);
+            return passableCache.computeIfAbsent(key,
+                    ignored -> world.getBlockAt(x, y, z).isPassable());
+        }
+
+        private boolean supportsFeet(int x, int y, int z) {
+            long key = key(x, y, z);
+            return supportCache.computeIfAbsent(key, ignored -> {
+                Block support = world.getBlockAt(x, y - 1, z);
+                return BlockSupport.supportsFeet(support, x + 0.5, y, z + 0.5);
+            });
+        }
+
+        private static long key(int x, int y, int z) {
+            return ((long) (x & 0x3FFFFFF) << 38) | ((long) (z & 0x3FFFFFF) << 12) | (y & 0xFFF);
         }
     }
 }

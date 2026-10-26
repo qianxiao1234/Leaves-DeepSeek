@@ -395,6 +395,12 @@ public final class BotNavigator {
         return bot != null && tasks.containsKey(bot.getUniqueId());
     }
 
+    /** Whether the current navigation task is actively issuing movement. */
+    public boolean isMoving(Bot bot) {
+        NavTask task = bot == null ? null : tasks.get(bot.getUniqueId());
+        return task != null && task.moving;
+    }
+
     /**
      * 是否正在空闲随机走动。
      */
@@ -594,6 +600,7 @@ public final class BotNavigator {
             forceRepath = false;
             if (planned.isEmpty()) {
                 path = null;
+                moving = false;
                 cancelMovement();
                 if (!following()) {
                     fail("找不到能走过去的路线");
@@ -762,6 +769,7 @@ public final class BotNavigator {
                 if (repathCooldown > 0) {
                     // 冷却中不重算，但有旧路径就继续沿旧路径走（旧实现直接 return，导致走走停停）
                     if (path == null) {
+                        moving = false;
                         cancelMovement();
                         return;
                     }
@@ -1063,7 +1071,8 @@ public final class BotNavigator {
                 if (!isOpen(feet) || !isOpen(feet.getRelative(BlockFace.UP))) {
                     return false;
                 }
-                if (!feet.getRelative(BlockFace.DOWN).getType().isSolid()) {
+                if (!BlockSupport.supportsFeet(feet.getRelative(BlockFace.DOWN),
+                        from.getX() + dx * t, feet.getY(), from.getZ() + dz * t)) {
                     return false;
                 }
             }

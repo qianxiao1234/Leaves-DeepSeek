@@ -17,14 +17,15 @@ import org.leavesmc.leaves.entity.bot.Bot;
  * 现在：</p>
  * <ul>
  *   <li>到达判定带滞回：{@code d <= distance + 0.5} 连续 10 tick → {@code task.done}；</li>
- *   <li>无进展判据：20 tick 内净位移 &lt; 0.5 格且仍未进入距离 → {@code task.failed(NO_PROGRESS)}；</li>
+ *   <li>无进展判据：5 秒内位移和接近距离都没有明显改善 → {@code task.failed(NO_PROGRESS)}；</li>
  *   <li>目标点由 {@code BotNavigator} 自己节流重算，任务层不再每 tick 改目标。</li>
  * </ul>
  */
 public final class FollowTask extends AbstractTask {
 
     private static final int ARRIVE_TICKS = 10;
-    private static final int NO_PROGRESS_TICKS = 20;
+    private static final int NO_PROGRESS_TICKS = 100;
+    private static final double PROGRESS_DISTANCE = 0.5;
 
     private final String playerName;
     private final double distance;
@@ -33,6 +34,7 @@ public final class FollowTask extends AbstractTask {
     private int inRangeTicks;
     private int progressTicks;
     private Location anchor;
+    private double anchorDistance;
 
     public FollowTask(String playerName, double distance) {
         this.playerName = playerName;
@@ -64,6 +66,7 @@ public final class FollowTask extends AbstractTask {
                         + " d=" + VecUtil.round(current) + " threshold=" + distance);
         body.manager().plugin().navigator().follow(bot, player, distance);
         anchor = bot.getLocation().clone();
+        anchorDistance = current;
     }
 
     @Override
@@ -88,6 +91,9 @@ public final class FollowTask extends AbstractTask {
 
         double current = VecUtil.horizontal(bot.getLocation(), player.getLocation());
         if (current <= distance + 0.5) {
+            progressTicks = 0;
+            anchor = bot.getLocation().clone();
+            anchorDistance = current;
             if (++inRangeTicks >= ARRIVE_TICKS) {
                 body.manager().plugin().log().info("躯壳",
                         "[TASK] " + id() + " follow done     elapsed=" + elapsedMs()
@@ -103,7 +109,9 @@ public final class FollowTask extends AbstractTask {
         }
         progressTicks = 0;
         Location now = bot.getLocation();
-        if (anchor != null && now.distanceSquared(anchor) < 0.25) {
+        boolean moved = anchor != null && now.distanceSquared(anchor) >= PROGRESS_DISTANCE * PROGRESS_DISTANCE;
+        boolean gotCloser = anchorDistance - current >= PROGRESS_DISTANCE;
+        if (!moved && !gotCloser) {
             body.manager().plugin().log().info("躯壳",
                     "[TASK] " + id() + " follow fail     elapsed=" + elapsedMs()
                             + "ms reason=NO_PROGRESS d=" + VecUtil.round(current));
@@ -111,6 +119,7 @@ public final class FollowTask extends AbstractTask {
             return;
         }
         anchor = now.clone();
+        anchorDistance = current;
     }
 
     @Override

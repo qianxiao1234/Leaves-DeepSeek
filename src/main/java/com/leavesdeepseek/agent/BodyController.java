@@ -1,6 +1,7 @@
 package com.leavesdeepseek.agent;
 
 import com.leavesdeepseek.agent.task.AgentTask;
+import com.leavesdeepseek.buddy.bot.BlockSupport;
 import com.leavesdeepseek.buddy.bot.WeaponRules;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -179,6 +180,12 @@ public final class BodyController {
         if (task == null) {
             return;
         }
+        if ("follow".equals(task.type())) {
+            Bot bot = body.bot();
+            if (bot != null) {
+                body.manager().plugin().navigator().abortFollow(bot);
+            }
+        }
         current = null;
         if (task.failed()) {
             body.sensors().taskFailed(task, task.failDetail());
@@ -313,6 +320,11 @@ public final class BodyController {
      */
     private void trackStuck(Bot bot) {
         Location now = bot.getLocation();
+        if (!body.manager().plugin().navigator().isMoving(bot)) {
+            lastPos = now.clone();
+            stuckTicks = 0;
+            return;
+        }
         if (lastPos == null || lastPos.getWorld() != now.getWorld()) {
             lastPos = now.clone();
             stuckTicks = 0;
@@ -356,8 +368,7 @@ public final class BodyController {
             double vz = Math.cos(angle) * 0.22;
             Location landing = new Location(now.getWorld(),
                     now.getX() + vx * 6, now.getY(), now.getZ() + vz * 6);
-            org.bukkit.block.Block below = landing.clone().subtract(0, 1, 0).getBlock();
-            if (below.isPassable() && !below.isLiquid()) {
+            if (!BlockSupport.supportsAt(landing.getWorld(), landing.getX(), landing.getY(), landing.getZ())) {
                 // 落点悬空：只跳不侧移
                 push = new Vector(0, 0.42, 0);
                 dir = "UP";
@@ -409,14 +420,14 @@ public final class BodyController {
         int dz = (int) Math.round(Math.cos(angle));
         int space = 0;
         for (int step = 1; step <= 3; step++) {
-            org.bukkit.block.Block feet = world.getBlockAt(from.getBlockX() + dx * step,
-                    from.getBlockY(), from.getBlockZ() + dz * step);
+            double x = from.getX() + dx * step;
+            double z = from.getZ() + dz * step;
+            org.bukkit.block.Block feet = world.getBlockAt(new Location(world, x, from.getY() + 0.6, z));
             org.bukkit.block.Block head = feet.getRelative(org.bukkit.block.BlockFace.UP);
-            org.bukkit.block.Block below = feet.getRelative(org.bukkit.block.BlockFace.DOWN);
             if (!feet.isPassable() || !head.isPassable()) {
                 break;
             }
-            if (below.isPassable() && !below.isLiquid()) {
+            if (!BlockSupport.supportsAt(world, x, from.getY(), z)) {
                 break;
             }
             space++;

@@ -12,11 +12,13 @@ import com.leavesdeepseek.agent.task.DigTask;
 import com.leavesdeepseek.agent.task.FollowTask;
 import com.leavesdeepseek.agent.task.GotoTask;
 import com.leavesdeepseek.agent.task.IdleTask;
+import com.leavesdeepseek.agent.task.InteractTask;
 import com.leavesdeepseek.agent.task.LookTask;
 import com.leavesdeepseek.agent.task.PlaceTask;
 import com.leavesdeepseek.agent.util.ItemUtil;
 import com.leavesdeepseek.agent.util.VecUtil;
 import com.leavesdeepseek.buddy.LeavesDeepSeekPlugin;
+import com.leavesdeepseek.buddy.bot.BlockSupport;
 import com.leavesdeepseek.buddy.util.Json;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
@@ -490,15 +492,19 @@ public final class AgentServer extends WebSocketServer {
         addHelp(methods, "sense.player", "radius?", "附近玩家（字段 n/p/d/hp/held/look/gm）");
         addHelp(methods, "sense.canReach", "x,y,z", "能不能够到");
         addHelp(methods, "act.goto", "x,y,z,range?,sprint?,interrupt?", "走过去（目标在实心方块里会自动上抬，回执 adjustY）");
-        addHelp(methods, "act.follow", "player,distance?", "跟到 distance+0.5 内并稳定 10 tick 即完成");
+        addHelp(methods, "act.follow", "player,distance?",
+                "跟到 distance+0.5 内并稳定 10 tick 即完成；持续无进展时失败 NO_PROGRESS");
         addHelp(methods, "act.look", "yaw+pitch | x,y,z | entityId", "平滑转向");
-        addHelp(methods, "act.attack", "entityId?,kind?,times?,chase?", "打目标");
+        addHelp(methods, "act.attack", "entityId?,kind?,times?,chase?",
+                "攻击以服务端确认的伤害计数；近处遮挡视线的可手动开门/活板门/栅栏门会尝试打开");
         addHelp(methods, "act.dig", "x,y,z,collect?", "挖一个方块");
         addHelp(methods, "act.digArea", "x1..z2,filter?", "挖一片（≤16³）");
         addHelp(methods, "act.place", "item,x,y,z", "放方块（手上要有）");
         addHelp(methods, "act.craft", "item,count?", "合成（3x3 需要半径 4 内有工作台）");
         addHelp(methods, "act.container", "x,y,z,action,item?,count?", "箱子存取（默认禁用）");
-        addHelp(methods, "act.use", "slot?", "右键当前/指定物品");
+        addHelp(methods, "act.interact", "x,y,z,slot?,interrupt?",
+                "走到能看见方块的一侧后右键；门会核验 open 状态（例如开门、按按钮）");
+        addHelp(methods, "act.use", "slot? | x,y,z,slot?,interrupt?", "右键使用物品；提供坐标时右键指定方块");
         addHelp(methods, "act.equip",
                 "item? | slot?（0-8 快捷栏 / 9-35 背包 / 36-39 盔甲 / 40 副手）", "装备");
         addHelp(methods, "act.eat",
@@ -661,9 +667,14 @@ public final class AgentServer extends WebSocketServer {
                         Json.getString(params, "action", "open"), material,
                         Json.getInt(params, "count", 64)), interrupt));
             }
+            case "act.interact":
+                return interact(body, params, interrupt);
             case "act.idle":
                 return submitted(body.controller().submit(new IdleTask(), interrupt));
             case "act.use":
+                if (params.has("x") && params.has("y") && params.has("z")) {
+                    return interact(body, params, interrupt);
+                }
                 return use(bot, params);
             case "act.equip":
                 return equip(body, bot, params);
@@ -711,6 +722,18 @@ public final class AgentServer extends WebSocketServer {
         result.addProperty("type", submitted.type());
         result.addProperty("etaMs", submitted.etaMs());
         return result;
+    }
+
+    private JsonElement interact(AIBody body, JsonObject params, boolean interrupt) {
+        Integer slot = null;
+        if (params.has("slot")) {
+            int requested = Json.getInt(params, "slot", -1);
+            if (requested < 0 || requested >= 9) {
+                throw new JsonRpc.RpcException(JsonRpc.BAD_REQUEST, "右键交互的 slot 必须在 0-8 快捷栏范围内");
+            }
+            slot = requested;
+        }
+        return submitted(body.controller().submit(new InteractTask(pointOf(params), slot), interrupt));
     }
 
     private JsonElement use(Bot bot, JsonObject params) {
@@ -973,12 +996,7 @@ public final class AgentServer extends WebSocketServer {
         org.bukkit.block.Block block = world.getBlockAt(Json.getInt(params, "x", 0),
                 Json.getInt(params, "y", 0), Json.getInt(params, "z", 0));
         JsonObject object = new JsonObject();
-        object.addProperty("id", block.getType().name().toLowerCase(Locale.ROOT));
-        object.addProperty("meta", 0);
-        object.addProperty("hardness", block.getType().getHardness());
-        object.addProperty("light", block.getLightLevel());
-        object.addProperty("passable", block.isPassable());
-        object.addProperty("solid", block.getType().isSolid());
+        addBlockData(object, block);
         return object;
     }
 
@@ -1012,7 +1030,8 @@ public final class AgentServer extends WebSocketServer {
         for (int x = minX; x <= maxX && array.size() < limit; x++) {
             for (int y = minY; y <= maxY && array.size() < limit; y++) {
                 for (int z = minZ; z <= maxZ && array.size() < limit; z++) {
-                    Material type = world.getBlockAt(x, y, z).getType();
+                    org.bukkit.block.Block block = world.getBlockAt(x, y, z);
+                    Material type = block.getType();
                     if (type.isAir()) {
                         continue;
                     }
@@ -1024,6 +1043,13 @@ public final class AgentServer extends WebSocketServer {
                     entry.addProperty("y", y);
                     entry.addProperty("z", z);
                     entry.addProperty("id", type.name().toLowerCase(Locale.ROOT));
+                    entry.addProperty("blockData", block.getBlockData().getAsString());
+                    entry.addProperty("passable", block.isPassable());
+                    entry.addProperty("solid", type.isSolid());
+                    entry.addProperty("collidable", block.isCollidable());
+                    if (block.getBlockData() instanceof org.bukkit.block.data.Openable openable) {
+                        entry.addProperty("open", openable.isOpen());
+                    }
                     array.add(entry);
                 }
             }
@@ -1050,7 +1076,8 @@ public final class AgentServer extends WebSocketServer {
                     int x = center.getBlockX() + dx;
                     int y = center.getBlockY() + dy;
                     int z = center.getBlockZ() + dz;
-                    if (world.getBlockAt(x, y, z).getType() != material) {
+                    org.bukkit.block.Block block = world.getBlockAt(x, y, z);
+                    if (block.getType() != material) {
                         continue;
                     }
                     JsonObject entry = new JsonObject();
@@ -1058,11 +1085,25 @@ public final class AgentServer extends WebSocketServer {
                     entry.addProperty("y", y);
                     entry.addProperty("z", z);
                     entry.addProperty("dist", VecUtil.round(center.distance(new Location(world, x, y, z))));
+                    addBlockData(entry, block);
                     array.add(entry);
                 }
             }
         }
         return array;
+    }
+
+    private static void addBlockData(JsonObject object, org.bukkit.block.Block block) {
+        object.addProperty("id", block.getType().name().toLowerCase(Locale.ROOT));
+        object.addProperty("blockData", block.getBlockData().getAsString());
+        object.addProperty("hardness", block.getType().getHardness());
+        object.addProperty("light", block.getLightLevel());
+        object.addProperty("passable", block.isPassable());
+        object.addProperty("solid", block.getType().isSolid());
+        object.addProperty("collidable", block.isCollidable());
+        if (block.getBlockData() instanceof org.bukkit.block.data.Openable openable) {
+            object.addProperty("open", openable.isOpen());
+        }
     }
 
     private JsonElement players(AIBody body, JsonObject params) {
@@ -1108,11 +1149,17 @@ public final class AgentServer extends WebSocketServer {
             org.bukkit.block.Block feet = world.getBlockAt(probe.getBlockX(),
                     (int) Math.floor(probe.getY()), probe.getBlockZ());
             org.bukkit.block.Block head = feet.getRelative(org.bukkit.block.BlockFace.UP);
-            org.bukkit.block.Block below = feet.getRelative(org.bukkit.block.BlockFace.DOWN);
-            if (feet.isPassable() && head.isPassable() && !below.isPassable() && below.getType().isSolid()) {
+            boolean feetClear = feet.isPassable()
+                    || BlockSupport.supportsFeet(feet, probe.getX(), probe.getY(), probe.getZ());
+            if (feetClear && head.isPassable()
+                    && BlockSupport.supportsAt(world, probe.getX(), probe.getY(), probe.getZ())) {
                 return probe;
             }
-            probe.add(0, 1, 0);
+            if (!feet.isPassable() && feet.getBoundingBox().getMaxY() > probe.getY()) {
+                probe.setY(feet.getBoundingBox().getMaxY() + 0.001);
+            } else {
+                probe.add(0, 1, 0);
+            }
         }
         return probe;
     }

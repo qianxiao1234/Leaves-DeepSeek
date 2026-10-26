@@ -1,6 +1,8 @@
 package com.leavesdeepseek.agent;
 
 import com.google.gson.JsonObject;
+import com.leavesdeepseek.agent.task.AgentTask;
+import com.leavesdeepseek.agent.task.AttackTask;
 import com.leavesdeepseek.agent.util.VecUtil;
 import com.leavesdeepseek.buddy.LeavesDeepSeekPlugin;
 import org.bukkit.Bukkit;
@@ -64,6 +66,25 @@ public final class AgentEvents implements Listener {
             params.addProperty("attackerId", attackerId);
         }
         body.sensors().event("ev.damage", params);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBodyAttack(EntityDamageByEntityEvent event) {
+        if (!(event.getDamager() instanceof Bot attacker) || event.getFinalDamage() <= 0) {
+            return;
+        }
+        BodyManager bodies = manager();
+        if (bodies == null) {
+            return;
+        }
+        AIBody body = bodies.byBot(attacker);
+        if (body == null) {
+            return;
+        }
+        AgentTask current = body.controller().current();
+        if (current instanceof AttackTask attack) {
+            attack.confirmDamage(event.getEntity(), event.getFinalDamage());
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

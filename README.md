@@ -466,11 +466,6 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 
 ## AI 躯壳 · 玩家速查
 
-> 给来帮忙测 bug 的朋友：**不用装任何东西**，进服、说话就行。
-
-服务器里那个叫 **Whalien** 的假人背后不是脚本，是一个会自己看、自己走、自己反应的 AI。
-它有三个名字，随便叫：**Whalien / 沈知潮 / 潮水**。
-
 ### 怎么跟它交流
 
 直接在聊天框说话，它看得见：
@@ -541,6 +536,8 @@ MC 插件 ──POST + X-API-Key──> http://<host>:6185/api/v1/chat ──SSE
 除了「有自己 AI 的伙伴假人」，插件还能造**躯壳**：一具完全交给外部机器人控制的生存玩家。
 躯壳不跟随、不护主、不闲聊、不自动决策——它只做外部 AI 下发的动作，感知数据按固定频率推回去。
 
+> 外部 AI 的连接、感知、移动、交互和结果确认流程见 [AI 躯壳操作指南](AGENT_GUIDE.md)。
+
 ```powershell
 # 1) config.yml：打开躯壳服务（默认关闭）
 agent:
@@ -576,10 +573,11 @@ ws://127.0.0.1:8123/agent
 {"jsonrpc":"2.0","id":1,"method":"body.attach","params":{"name":"Whalien"}}
 {"jsonrpc":"2.0","id":2,"method":"sense.snapshot"}
 {"jsonrpc":"2.0","id":3,"method":"act.goto","params":{"x":120,"y":70,"z":-300}}
+{"jsonrpc":"2.0","id":4,"method":"act.interact","params":{"x":121,"y":70,"z":-300}}
 
 # 也可以让 AI 自己造躯壳（不需要先 attach）
-{"jsonrpc":"2.0","id":4,"method":"body.list"}
-{"jsonrpc":"2.0","id":5,"method":"body.create","params":{"name":"Whalien"}}
+{"jsonrpc":"2.0","id":5,"method":"body.list"}
+{"jsonrpc":"2.0","id":6,"method":"body.create","params":{"name":"Whalien"}}
 ```
 
 - **躯壳生命周期（不需要 attach）**：`body.list`（全部躯壳 + `mine` 标记）、
@@ -590,12 +588,15 @@ ws://127.0.0.1:8123/agent
   `body.wake`（旁观 → remote，等价于重复 attach）。`act.*` 在旁观/倒地时分别返回
   `-32020 reason=paused` / `-32015 reason=downed`，客户端可以据此决定"自愈"还是"等"。
 
-- 感知：`sense.snapshot / terrain / entity / item / blockAt / blocks / findBlock / player / canReach`，
+- 感知：`sense.snapshot / terrain / entity / item / blockAt / blocks / findBlock / player / canReach`；
+  方块查询返回 `blockData` 状态字符串（如门的方向和开关状态）及碰撞信息，可开关方块另含当前 `open` 状态，不再提供旧版 `meta` 字段。
   另有 5 Hz 的 `t:"M"`（运动）、`t:"T"`（地形语义）、`t:"P"`（附近玩家）、`t:"K"`（任务）、
   背包变化时的 `t:"I"`。
-- 动作：`act.goto / follow / look / attack / dig / digArea / place / craft / container / use / equip /
+- 动作：`act.goto / follow / look / attack / dig / digArea / place / craft / container / interact / use / equip /
   eat / drop / jump / sneak / sprint / chat / cancel / queue`，统一返回 `taskId`，进度和结果用
   `task.started / task.progress / task.done / task.failed` 事件推回。
+  `act.follow` 到达后会结束并停止跟随；玩家继续移动时需再次提交。
+  `act.attack` 的进度只统计服务端确认造成的伤害；`act.interact` 会寻找可见站位，并在门状态未改变时报告失败。
 - 事件：`ev.damage / death / respawn / playerNear / playerLeave / chat / itemPickup / hungry / state`。
 - 三态：90 秒没有请求自动切成**旁观**（`paused`，不受伤也不能动作），再 300 秒存档下线（`offline`）；
   重新 `body.attach` 会原地恢复（背包/经验/血量都在）。客户端每 20 秒发一次 **`body.keepalive`** 就不会被塞进旁观
